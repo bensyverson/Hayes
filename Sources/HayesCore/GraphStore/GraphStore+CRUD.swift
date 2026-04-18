@@ -9,23 +9,16 @@ public extension GraphStore {
     /// - Returns: The inserted ``Node``.
     func insertNode(text: String, embedding: [Float]) throws -> Node {
         let data = dataFromFloats(embedding)
-        for _ in 0 ..< 5 {
-            let id = nextID()
-            do {
-                try database.write { db in
-                    try db.execute(
-                        sql: "INSERT INTO nodes (id, text, embedding) VALUES (?, ?, ?)",
-                        arguments: [id, text, data]
-                    )
-                }
-                let node = Node(id: id, text: text, embedding: embedding)
-                cacheEmbedding(id: id, embedding: embedding)
-                return node
-            } catch let error as DatabaseError where error.resultCode == .SQLITE_CONSTRAINT {
-                continue
+        return try withIDRetry { id in
+            try database.write { db in
+                try db.execute(
+                    sql: "INSERT INTO nodes (id, text, embedding) VALUES (?, ?, ?)",
+                    arguments: [id, text, data]
+                )
             }
+            cacheEmbedding(id: id, embedding: embedding)
+            return Node(id: id, text: text, embedding: embedding)
         }
-        throw GraphStore.Error.idCollisionExhausted
     }
 
     /// Looks up a node by identifier.
@@ -57,7 +50,7 @@ public extension GraphStore {
     ///   - weight: The edge weight (will be clamped).
     /// - Returns: The inserted ``Edge``.
     func insertEdge(sourceID: String, targetID: String, weight: Double) throws -> Edge {
-        let clamped = max(0.0, min(1.0, weight))
+        let clamped = weight.clampedToUnit
         let now = Date()
         try database.write { db in
             try db.execute(
@@ -76,7 +69,7 @@ public extension GraphStore {
     ///   - targetID: The target node identifier.
     ///   - weight: The new weight (will be clamped).
     func updateEdgeWeight(sourceID: String, targetID: String, weight: Double) throws {
-        let clamped = max(0.0, min(1.0, weight))
+        let clamped = weight.clampedToUnit
         let now = Date().timeIntervalSince1970
         try database.write { db in
             try db.execute(
@@ -129,38 +122,32 @@ public extension GraphStore {
     func insertAct(seedIDs: [String], behaviorIDs: [String]) throws -> Act {
         let storedInterval = Date().timeIntervalSince1970
         let createdAt = Date(timeIntervalSince1970: storedInterval)
-        let seedJSON = try String(data: JSONEncoder().encode(seedIDs), encoding: .utf8) ?? "[]"
-        let behaviorJSON = try String(data: JSONEncoder().encode(behaviorIDs), encoding: .utf8) ?? "[]"
-        for _ in 0 ..< 5 {
-            let id = nextID()
-            do {
-                try database.write { db in
-                    try db.execute(
-                        sql: """
-                        INSERT INTO acts (id, created_at, seed_ids, behavior_ids, status)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        arguments: [
-                            id,
-                            storedInterval,
-                            seedJSON,
-                            behaviorJSON,
-                            ActStatus.pending.rawValue,
-                        ]
-                    )
-                }
-                return Act(
-                    id: id,
-                    createdAt: createdAt,
-                    seedIDs: seedIDs,
-                    behaviorIDs: behaviorIDs,
-                    status: .pending
+        let seedJSON = try encodeIDList(seedIDs)
+        let behaviorJSON = try encodeIDList(behaviorIDs)
+        return try withIDRetry { id in
+            try database.write { db in
+                try db.execute(
+                    sql: """
+                    INSERT INTO acts (id, created_at, seed_ids, behavior_ids, status)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    arguments: [
+                        id,
+                        storedInterval,
+                        seedJSON,
+                        behaviorJSON,
+                        ActStatus.pending.rawValue,
+                    ]
                 )
-            } catch let error as DatabaseError where error.resultCode == .SQLITE_CONSTRAINT {
-                continue
             }
+            return Act(
+                id: id,
+                createdAt: createdAt,
+                seedIDs: seedIDs,
+                behaviorIDs: behaviorIDs,
+                status: .pending
+            )
         }
-        throw GraphStore.Error.idCollisionExhausted
     }
 
     /// Returns the most recent acts matching the given status set.
@@ -237,6 +224,48 @@ public extension GraphStore {
 }
 
 extension GraphStore {
+    /// Fetches multiple nodes by ID in a single query.
+    func findNodes(ids: [String]) throws -> [Node] {
+        guard !ids.isEmpty else { return [] }
+        return try database.read { db in
+            let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
+            let arguments: [any DatabaseValueConvertible] = ids
+            return try Row.fetchAll(
+                db,
+                sql: "SELECT id, text, embedding FROM nodes WHERE id IN (\(placeholders))",
+                arguments: StatementArguments(arguments)
+            ).map { GraphStore.makeNode(row: $0) }
+        }
+    }
+
+    /// Fetches all outgoing edges whose `source_id` is in `sourceIDs`.
+    func outgoingEdges(sourceIDs: [String]) throws -> [Edge] {
+        guard !sourceIDs.isEmpty else { return [] }
+        return try database.read { db in
+            let placeholders = Array(repeating: "?", count: sourceIDs.count).joined(separator: ",")
+            let arguments: [any DatabaseValueConvertible] = sourceIDs
+            return try Row.fetchAll(
+                db,
+                sql: """
+                SELECT source_id, target_id, weight, updated_at FROM edges
+                WHERE source_id IN (\(placeholders))
+                """,
+                arguments: StatementArguments(arguments)
+            ).map { GraphStore.makeEdge(row: $0) }
+        }
+    }
+}
+
+extension GraphStore {
+    static func encodeIDList(_ ids: [String]) throws -> String {
+        let data = try JSONEncoder().encode(ids)
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    func encodeIDList(_ ids: [String]) throws -> String {
+        try GraphStore.encodeIDList(ids)
+    }
+
     static func makeNode(row: Row) -> Node {
         let data: Data = row["embedding"] ?? Data()
         return Node(
@@ -258,11 +287,10 @@ extension GraphStore {
     static func makeAct(row: Row) -> Act? {
         let seedJSON: String = row["seed_ids"]
         let behaviorJSON: String = row["behavior_ids"]
+        let decoder = JSONDecoder()
         guard
-            let seedData = seedJSON.data(using: .utf8),
-            let behaviorData = behaviorJSON.data(using: .utf8),
-            let seedIDs = try? JSONDecoder().decode([String].self, from: seedData),
-            let behaviorIDs = try? JSONDecoder().decode([String].self, from: behaviorData),
+            let seedIDs = try? decoder.decode([String].self, from: Data(seedJSON.utf8)),
+            let behaviorIDs = try? decoder.decode([String].self, from: Data(behaviorJSON.utf8)),
             let status = ActStatus(rawValue: row["status"])
         else { return nil }
         return Act(

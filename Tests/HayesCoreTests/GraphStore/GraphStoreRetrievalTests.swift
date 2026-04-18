@@ -4,10 +4,15 @@ import Testing
 
 @Suite("GraphStore retrieval")
 struct GraphStoreRetrievalTests {
+    let provider: NLEmbeddingProvider
+
+    init() throws {
+        provider = try NLEmbeddingProvider()
+    }
+
     @Test("empty seeds yield an empty result")
     func noSeedsAboveThreshold() async throws {
         let store = try GraphStore.inMemory()
-        let provider = try NLEmbeddingProvider()
         let query = try provider.embed("yoga studio")
         let result = try await store.retrieve(contextEmbeddings: [query])
         #expect(result.seeds.isEmpty)
@@ -16,7 +21,6 @@ struct GraphStoreRetrievalTests {
 
     @Test("retrieves related seeds and summed behaviors above threshold")
     func retrievesSeedsAndBehaviors() async throws {
-        let provider = try NLEmbeddingProvider()
         let store = try GraphStore.inMemory()
 
         let yoga = try await store.insertNode(
@@ -59,7 +63,6 @@ struct GraphStoreRetrievalTests {
 
     @Test("minEdgeWeight filters weak edges")
     func minEdgeWeightFilter() async throws {
-        let provider = try NLEmbeddingProvider()
         let store = try GraphStore.inMemory()
         let yoga = try await store.insertNode(
             text: "yoga studio",
@@ -89,7 +92,6 @@ struct GraphStoreRetrievalTests {
 
     @Test("topBehaviors cap is honored")
     func topBehaviorsCap() async throws {
-        let provider = try NLEmbeddingProvider()
         let store = try GraphStore.inMemory()
         let seed = try await store.insertNode(
             text: "yoga studio",
@@ -118,7 +120,6 @@ struct GraphStoreRetrievalTests {
 
     @Test("topSeeds cap is honored")
     func topSeedsCap() async throws {
-        let provider = try NLEmbeddingProvider()
         let store = try GraphStore.inMemory()
         // Insert many similar nodes
         for i in 0 ..< 10 {

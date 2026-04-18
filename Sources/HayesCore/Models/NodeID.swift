@@ -9,16 +9,11 @@ public enum NodeID {
     /// The 62-character alphabet used to generate node identifiers.
     public static let alphabet: String = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
+    private static let alphabetChars: [Character] = Array(alphabet)
+
     /// Generates a new random 6-character node identifier.
     /// - Returns: A fresh random identifier drawn from ``alphabet``.
     public static func make() -> String {
-        let chars = Array(alphabet)
-        var result = ""
-        result.reserveCapacity(6)
-        for _ in 0 ..< 6 {
-            let index = Int.random(in: 0 ..< chars.count)
-            result.append(chars[index])
-        }
-        return result
+        String((0 ..< 6).map { _ in alphabetChars.randomElement()! })
     }
 }

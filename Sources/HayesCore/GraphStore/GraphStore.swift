@@ -20,8 +20,6 @@ public actor GraphStore {
     public enum Error: Swift.Error, Sendable {
         /// A primary-key collision could not be resolved within the retry budget.
         case idCollisionExhausted
-        /// The referenced node does not exist.
-        case nodeNotFound(id: String)
         /// The referenced edge does not exist.
         case edgeNotFound(sourceID: String, targetID: String)
         /// The referenced act does not exist.
@@ -78,6 +76,19 @@ public actor GraphStore {
         idGenerator()
     }
 
+    /// Runs `body` with freshly-generated IDs, retrying on SQLite primary-key
+    /// collisions up to ``maxIDRetries`` attempts.
+    func withIDRetry<Value>(_ body: (String) throws -> Value) throws -> Value {
+        for _ in 0 ..< GraphStore.maxIDRetries {
+            do {
+                return try body(nextID())
+            } catch let error as GRDB.DatabaseError where error.resultCode == .SQLITE_CONSTRAINT {
+                continue
+            }
+        }
+        throw GraphStore.Error.idCollisionExhausted
+    }
+
     private static func loadEmbeddingCache(_ queue: DatabaseQueue) throws -> [String: [Float]] {
         try queue.read { db in
             var cache: [String: [Float]] = [:]
@@ -89,6 +100,13 @@ public actor GraphStore {
             }
             return cache
         }
+    }
+}
+
+extension Double {
+    /// Returns `self` clamped to `[0.0, 1.0]`.
+    var clampedToUnit: Double {
+        min(1.0, max(0.0, self))
     }
 }
 

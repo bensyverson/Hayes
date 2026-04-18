@@ -43,28 +43,31 @@ public extension GraphStore {
 
         guard !rankedSeedIDs.isEmpty else { return .empty }
 
-        var seedNodes: [RetrievalResult.Scored<Node>] = []
-        var behaviorScores: [String: Double] = [:]
+        let seedNodesByID = try Dictionary(
+            uniqueKeysWithValues: findNodes(ids: rankedSeedIDs).map { ($0.id, $0) }
+        )
+        let seedNodes: [RetrievalResult.Scored<Node>] = rankedSeedIDs.compactMap { id in
+            guard let node = seedNodesByID[id], let sim = bestSimilarity[id] else { return nil }
+            return RetrievalResult.Scored<Node>(value: node, score: Double(sim))
+        }
 
-        for seedID in rankedSeedIDs {
-            guard let seedNode = try findNode(id: seedID),
-                  let sim = bestSimilarity[seedID] else { continue }
-            seedNodes.append(RetrievalResult.Scored<Node>(value: seedNode, score: Double(sim)))
-            let edges = try outgoingEdges(from: seedID)
-            for edge in edges where edge.weight >= config.minEdgeWeight {
-                behaviorScores[edge.targetID, default: 0.0] += edge.weight
-            }
+        var behaviorScores: [String: Double] = [:]
+        for edge in try outgoingEdges(sourceIDs: rankedSeedIDs)
+            where edge.weight >= config.minEdgeWeight
+        {
+            behaviorScores[edge.targetID, default: 0.0] += edge.weight
         }
 
         let rankedBehaviorEntries = behaviorScores
             .sorted { $0.value > $1.value }
             .prefix(config.topBehaviors)
-
-        var behaviorNodes: [RetrievalResult.Scored<Node>] = []
-        for (targetID, summedWeight) in rankedBehaviorEntries {
-            if let node = try findNode(id: targetID) {
-                behaviorNodes.append(RetrievalResult.Scored<Node>(value: node, score: summedWeight))
-            }
+        let behaviorIDs = rankedBehaviorEntries.map(\.key)
+        let behaviorNodesByID = try Dictionary(
+            uniqueKeysWithValues: findNodes(ids: behaviorIDs).map { ($0.id, $0) }
+        )
+        let behaviorNodes: [RetrievalResult.Scored<Node>] = rankedBehaviorEntries.compactMap { entry in
+            guard let node = behaviorNodesByID[entry.key] else { return nil }
+            return RetrievalResult.Scored<Node>(value: node, score: entry.value)
         }
 
         return RetrievalResult(seeds: seedNodes, behaviors: behaviorNodes)

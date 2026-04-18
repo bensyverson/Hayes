@@ -35,13 +35,14 @@ public extension GraphStore {
 
         for seedID in act.seedIDs {
             for behaviorID in act.behaviorIDs {
-                let existing = try findEdge(sourceID: seedID, targetID: behaviorID)?.weight ?? 0.0
+                let existing = try findEdge(sourceID: seedID, targetID: behaviorID)
+                let current = existing?.weight ?? 0.0
                 let updated: Double = if sentiment > 0 {
-                    min(1.0, existing + config.posDelta * sentiment * sourceScale)
+                    (current + config.posDelta * sentiment * sourceScale).clampedToUnit
                 } else {
-                    max(0.0, existing * (1.0 - config.negDecay * abs(sentiment) * sourceScale))
+                    (current * (1.0 - config.negDecay * abs(sentiment) * sourceScale)).clampedToUnit
                 }
-                if try findEdge(sourceID: seedID, targetID: behaviorID) != nil {
+                if existing != nil {
                     try updateEdgeWeight(sourceID: seedID, targetID: behaviorID, weight: updated)
                 } else {
                     _ = try insertEdge(sourceID: seedID, targetID: behaviorID, weight: updated)
