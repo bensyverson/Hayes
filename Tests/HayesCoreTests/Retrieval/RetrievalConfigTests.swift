@@ -17,6 +17,7 @@ struct RetrievalConfigTests {
         #expect(config.userFeedbackScale == 1.0)
         #expect(config.selfAssessmentScale == 0.3)
         #expect(config.recentActsWindow == 50)
+        #expect(config.contextWindowSize == 5)
     }
 
     @Test("Codable round-trip preserves fields")

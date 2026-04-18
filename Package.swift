@@ -11,7 +11,7 @@ let package = Package(
         .executable(name: "hayes", targets: ["HayesCommand"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/bensyverson/Operator", branch: "main"),
+        .package(path: "../Operator"),
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
         .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.3.0"),
     ],

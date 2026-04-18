@@ -24,6 +24,8 @@ public struct RetrievalConfig: Friendly {
     public var selfAssessmentScale: Double
     /// Number of recent acts the analysis runner considers.
     public var recentActsWindow: Int
+    /// Number of trailing conversation messages passed to ``ContextExtractor``.
+    public var contextWindowSize: Int
 
     /// Creates a new config. All parameters have defaults taken from the decisions log.
     /// - Parameters:
@@ -37,6 +39,8 @@ public struct RetrievalConfig: Friendly {
     ///   - userFeedbackScale: User-feedback trust scale. Default `1.0`.
     ///   - selfAssessmentScale: Self-assessment trust scale. Default `0.3`.
     ///   - recentActsWindow: Recent-acts window. Default `50`.
+    ///   - contextWindowSize: Number of trailing conversation messages passed to
+    ///     ``ContextExtractor``. Default `5`.
     public init(
         seedThreshold: Float = 0.6,
         dedupThreshold: Float = 0.85,
@@ -47,7 +51,8 @@ public struct RetrievalConfig: Friendly {
         negDecay: Double = 0.10,
         userFeedbackScale: Double = 1.0,
         selfAssessmentScale: Double = 0.3,
-        recentActsWindow: Int = 50
+        recentActsWindow: Int = 50,
+        contextWindowSize: Int = 5
     ) {
         self.seedThreshold = seedThreshold
         self.dedupThreshold = dedupThreshold
@@ -59,6 +64,7 @@ public struct RetrievalConfig: Friendly {
         self.userFeedbackScale = userFeedbackScale
         self.selfAssessmentScale = selfAssessmentScale
         self.recentActsWindow = recentActsWindow
+        self.contextWindowSize = contextWindowSize
     }
 
     /// The default configuration, matching the decisions log.

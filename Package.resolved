@@ -1,5 +1,5 @@
 {
-  "originHash" : "1925a691db6ec85dd90381340efd1b6349255765306c70924af27145054c423a",
+  "originHash" : "263d0725fc0956d2034cacdc02527c529d03e245cceaa82e0c7a31959bf2e831",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -35,15 +35,6 @@
       "state" : {
         "branch" : "main",
         "revision" : "7d6921d6dbc79ea3ade28c4be32e8245a16e64f5"
-      }
-    },
-    {
-      "identity" : "operator",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/bensyverson/Operator",
-      "state" : {
-        "branch" : "main",
-        "revision" : "3d8191b51dfd8fc6693de3aa6c16204c78f3625b"
       }
     },
     {

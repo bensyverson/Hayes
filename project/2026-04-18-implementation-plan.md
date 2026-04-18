@@ -315,6 +315,21 @@ Full suite: 253 tests passing; `swiftformat . --lint` clean; DocC builds (one pr
 
 **Estimated session length:** 2–2.5 hours.
 
+### Implementation notes (completed 2026-04-18)
+
+- Switched the `Operator` dependency to a local path (`../Operator`) per plan; `swift build` green.
+- Added `contextWindowSize: Int = 5` to `RetrievalConfig` for the extractor window; covered by `RetrievalConfigTests`.
+- Implemented the full `Memory` module under `Sources/HayesCore/Memory/`: `LLMClient` / `OperatorLLMClient`, `MemoryPrompts`, `ActFeedback`, `AnalysisResult`, `ContextExtractor`, `AnalysisRunner` (with nested `RecentActSummary`), `MiddlewareEvent`, `MemoryMiddleware`.
+- `AnalysisResult` decodes tolerantly: `null` or missing `user_feedback` / `self_assessment` → empty array.
+- `ContextExtractor` strips ```` ```json ```` fences before decoding; throws `InvalidInput` on empty window, `InvalidJSON` on parse failure.
+- **Order-of-operations correction vs. spec:** in `MemoryMiddleware.beforeRequest`, retrieval runs *before* inserting new context nodes. Embedding first and retrieving against the prior corpus keeps brand-new phrases from retrieving themselves as seeds in an empty / near-empty graph (original spec had insert → retrieve, which surfaced the fresh nodes as their own seeds). Existing matches are still found because the dedup pass after retrieval reuses the same IDs.
+- `MemoryMiddleware` is `final class @unchecked Sendable` with an `NSLock`-guarded per-run context-node map (key = stable short hash of the triggering user message). `AsyncStream.Continuation` lives alongside the run map behind the same pattern.
+- Unknown `actID` in feedback is caught (`GraphStore.Error.actNotFound`) and the loop continues; the full feedback list is still emitted on the event stream.
+- `beforeRequest` is idempotent: subsequent calls within the same run detect the existing `memory` assistant tool-call message and no-op.
+- `MockLLM` (HayesCore-owned) + `FakeEmbeddingProvider` (deterministic one-hot unit vectors) + `FakeTurn` fixtures live in `Tests/HayesCoreTests/Memory/Support/`.
+- Full suite: **71 tests green**, `swiftformat --lint` clean, DocC adds `Memory pipeline` topic group + `MemoryPipeline.md` article.
+- Prior Phase 2 draft (`project/2026-04-18-phase-2.md`) deleted; this plan is canonical.
+
 ---
 
 ## Phase 3 — HayesCommand CLI
