@@ -112,6 +112,40 @@ struct ContextExtractorTests {
         #expect(mock.calls[0].userMessage.contains("user: Design a yoga studio website"))
     }
 
+    @Test("prior phrases flow into the prompt and the returned set replaces them")
+    func rollingPhrasesWiring() async throws {
+        let mock = MockLLM(responses: ["""
+        ["landing page design", "warm palette"]
+        """])
+        let extractor = ContextExtractor(llm: mock)
+        let result = try await extractor.extract(
+            recentMessages: [FakeTurn.userMessage("make it warmer")],
+            priorPhrases: ["landing page design", "wellness brand", "calm minimal aesthetic"]
+        )
+        // The returned set replaces the prior — not merged, not appended.
+        #expect(result == ["landing page design", "warm palette"])
+        #expect(mock.calls.count == 1)
+        let userMsg = mock.calls[0].userMessage
+        #expect(userMsg.contains("CURRENT WORKING CONTEXT"))
+        #expect(userMsg.contains("landing page design"))
+        #expect(userMsg.contains("wellness brand"))
+        #expect(userMsg.contains("calm minimal aesthetic"))
+        #expect(userMsg.contains("make it warmer"))
+    }
+
+    @Test("empty prior phrases omits the CURRENT WORKING CONTEXT block")
+    func emptyPriorPhrasesOmitsBlock() async throws {
+        let mock = MockLLM(responses: ["""
+        ["a"]
+        """])
+        let extractor = ContextExtractor(llm: mock)
+        _ = try await extractor.extract(
+            recentMessages: [FakeTurn.userMessage("hi")],
+            priorPhrases: []
+        )
+        #expect(!mock.calls[0].userMessage.contains("CURRENT WORKING CONTEXT"))
+    }
+
     @Test("multi-turn transcript reaches the prompt")
     func multiTurnWiring() async throws {
         let mock = MockLLM(responses: ["""

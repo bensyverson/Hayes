@@ -11,6 +11,10 @@ public enum MiddlewareEvent: Friendly {
     )
     /// Fired in `afterRun` with the technique / generalization phrases.
     case movesExtracted(texts: [String])
+    /// Fired in `afterRun` when the analyzer returned an empty `moves`
+    /// list. Surfaces a silent failure — the act is still created, but
+    /// without behaviors it cannot form edges with any seed.
+    case analysisEmpty(reason: String)
     /// Fired in `afterRun` with user-feedback attributions.
     case userFeedback([ActFeedback])
     /// Fired in `afterRun` with self-assessment attributions.

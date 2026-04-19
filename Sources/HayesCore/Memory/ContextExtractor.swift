@@ -53,27 +53,57 @@ public struct ContextExtractor: Sendable {
 
     /// Infers 3-5 functional-context phrases for the conversation so far.
     ///
-    /// Formats `recentMessages` as a labelled transcript, sends it through
-    /// ``MemoryPrompts/contextExtraction``, and parses the response as a
-    /// top-level JSON array of strings.
+    /// Formats `recentMessages` as a labelled transcript (preceded by an
+    /// optional "CURRENT WORKING CONTEXT" section listing `priorPhrases`),
+    /// sends it through ``MemoryPrompts/contextExtraction``, and parses the
+    /// response as a top-level JSON array of strings.
     ///
-    /// - Parameter recentMessages: The tail of the conversation, both roles.
-    ///   The caller (middleware) decides the window size via
-    ///   ``RetrievalConfig/contextWindowSize``.
+    /// When `priorPhrases` is non-empty the call is a conversational
+    /// revision: the LLM is asked to keep the zoomed-out framing while
+    /// dropping stale phrases and adding newly-relevant ones.
+    ///
+    /// - Parameters:
+    ///   - recentMessages: The tail of the conversation, both roles.
+    ///     The caller (middleware) decides the window size via
+    ///     ``RetrievalConfig/contextWindowSize``.
+    ///   - priorPhrases: The phrases surfaced on the previous turn, to
+    ///     revise rather than re-infer from scratch. Defaults to `[]`.
     /// - Returns: 3-5 enriched phrases. Empty array is tolerated.
     /// - Throws: ``InvalidInput`` if `recentMessages` is empty.
     ///           ``InvalidJSON`` if the response is not a JSON array of strings.
-    public func extract(recentMessages: [Operator.Message]) async throws -> [String] {
+    public func extract(
+        recentMessages: [Operator.Message],
+        priorPhrases: [String] = []
+    ) async throws -> [String] {
         guard !recentMessages.isEmpty else {
             throw InvalidInput()
         }
 
-        let transcript = ContextExtractor.formatTranscript(recentMessages)
+        let userMessage = ContextExtractor.formatUserMessage(
+            messages: recentMessages,
+            priorPhrases: priorPhrases
+        )
         let raw = try await llm.complete(
             systemPrompt: MemoryPrompts.contextExtraction,
-            userMessage: transcript
+            userMessage: userMessage
         )
         return try ContextExtractor.parse(raw)
+    }
+
+    static func formatUserMessage(
+        messages: [Operator.Message],
+        priorPhrases: [String]
+    ) -> String {
+        let transcript = formatTranscript(messages)
+        guard !priorPhrases.isEmpty else { return transcript }
+        let phrasesBlock = priorPhrases.map { "- \($0)" }.joined(separator: "\n")
+        return """
+        CURRENT WORKING CONTEXT:
+        \(phrasesBlock)
+
+        TRANSCRIPT:
+        \(transcript)
+        """
     }
 
     static func formatTranscript(_ messages: [Operator.Message]) -> String {

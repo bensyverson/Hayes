@@ -404,7 +404,147 @@ struct MemoryMiddlewareTests {
         #expect(payload.contains("(none)"))
     }
 
-    // MARK: - Scenario 10: phantom memory tool-call arguments must be a JSON object
+    // MARK: - Scenario 10: rolling phrases + persisted memory exchange
+
+    @Test("turn 2 passes turn 1's phrases as priorPhrases and does not stack another memory exchange")
+    func rollingPhrasesAndNoRestack() async throws {
+        let store = try GraphStore.inMemory()
+        let embeddings = FakeEmbeddingProvider()
+        let (middleware, extractorLLM, _) = Self.makeMiddleware(
+            store: store,
+            embeddings: embeddings,
+            extractor: [
+                """
+                ["landing page design", "wellness brand"]
+                """,
+                """
+                ["landing page design", "warm palette"]
+                """,
+            ],
+            analyzer: [
+                """
+                {"moves": [], "user_feedback": [], "self_assessment": []}
+                """,
+            ]
+        )
+
+        // Turn 1 — populate phrases + inject memory exchange.
+        var req1 = FakeTurn.request(messages: [FakeTurn.userMessage("Design a yoga site")])
+        try await middleware.beforeRequest(&req1)
+
+        // Turn 2 — preserve the turn-1 transcript (including the persisted
+        // memory tool exchange) and add a new user turn.
+        let turn2Messages = req1.messages + [
+            FakeTurn.assistantMessage("ok"),
+            FakeTurn.userMessage("make it warmer"),
+        ]
+        var req2 = FakeTurn.request(messages: turn2Messages)
+        let countBefore = req2.messages.count
+        try await middleware.beforeRequest(&req2)
+
+        // No new memory tool call should be stacked.
+        let toolCalls = req2.messages.compactMap(\.toolCalls).flatMap { $0 }.filter { $0.name == "memory" }
+        #expect(toolCalls.count == 1)
+        #expect(req2.messages.count == countBefore)
+
+        // Extractor ran twice. Second call's user message carries the
+        // prior-turn phrases as CURRENT WORKING CONTEXT.
+        #expect(extractorLLM.calls.count == 2)
+        let secondUserMessage = extractorLLM.calls[1].userMessage
+        #expect(secondUserMessage.contains("CURRENT WORKING CONTEXT"))
+        #expect(secondUserMessage.contains("landing page design"))
+        #expect(secondUserMessage.contains("wellness brand"))
+        #expect(secondUserMessage.contains("make it warmer"))
+    }
+
+    // MARK: - Scenario 11: empty moves emits analysisEmpty event
+
+    @Test("empty moves list emits analysisEmpty")
+    func emptyMovesEmitsAnalysisEmpty() async throws {
+        let store = try GraphStore.inMemory()
+        let embeddings = FakeEmbeddingProvider()
+        let (middleware, _, _) = Self.makeMiddleware(
+            store: store,
+            embeddings: embeddings,
+            extractor: ["""
+            ["x"]
+            """],
+            analyzer: ["""
+            {"moves": [], "user_feedback": [], "self_assessment": []}
+            """]
+        )
+
+        var req = FakeTurn.request(messages: [FakeTurn.userMessage("update")])
+        try await middleware.beforeRequest(&req)
+        try await middleware.afterRun(Self.userTurn())
+
+        let reason = await Self.firstEvent(middleware) { event -> String? in
+            if case let .analysisEmpty(reason) = event { return reason }
+            return nil
+        }
+        #expect(reason != nil)
+    }
+
+    // MARK: - Scenario 12: seeds still populated even when transcript already has a memory exchange
+
+    @Test("turn 2 populates seedIDs for the new act even though no memory exchange was injected")
+    func turn2ActHasSeeds() async throws {
+        let store = try GraphStore.inMemory()
+        let embeddings = FakeEmbeddingProvider()
+        let (middleware, _, _) = Self.makeMiddleware(
+            store: store,
+            embeddings: embeddings,
+            extractor: [
+                """
+                ["first"]
+                """,
+                """
+                ["second"]
+                """,
+            ],
+            analyzer: [
+                """
+                {"moves": ["m1"], "user_feedback": [], "self_assessment": []}
+                """,
+                """
+                {"moves": ["m2"], "user_feedback": [], "self_assessment": []}
+                """,
+            ]
+        )
+
+        // Turn 1
+        var req1 = FakeTurn.request(messages: [FakeTurn.userMessage("Design a yoga site")])
+        try await middleware.beforeRequest(&req1)
+        try await middleware.afterRun(Operator.RunContext(
+            messages: [FakeTurn.userMessage("Design a yoga site"), FakeTurn.assistantMessage("ok")],
+            thinking: "",
+            finalText: "ok",
+            toolCalls: []
+        ))
+
+        // Turn 2 — preserve persisted memory exchange + add a new user turn.
+        let turn2Messages = req1.messages + [
+            FakeTurn.assistantMessage("ok"),
+            FakeTurn.userMessage("make it warmer"),
+        ]
+        var req2 = FakeTurn.request(messages: turn2Messages)
+        try await middleware.beforeRequest(&req2)
+        try await middleware.afterRun(Operator.RunContext(
+            messages: turn2Messages + [FakeTurn.assistantMessage("ok2")],
+            thinking: "",
+            finalText: "ok2",
+            toolCalls: []
+        ))
+
+        let acts = try await store.recentActs(limit: 10)
+        #expect(acts.count == 2)
+        for act in acts {
+            #expect(!act.seedIDs.isEmpty, "every act should have seeds — regression for the zero-edges bug")
+            #expect(!act.behaviorIDs.isEmpty)
+        }
+    }
+
+    // MARK: - Scenario 13: phantom memory tool-call arguments must be a JSON object
 
     @Test("phantom memory tool arguments serialize as a JSON object, not an array")
     func phantomArgumentsAreObject() async throws {

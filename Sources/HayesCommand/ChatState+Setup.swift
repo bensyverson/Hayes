@@ -49,7 +49,11 @@ extension ChatState {
             let service = LLMServiceAdapter(provider: .anthropic(apiKey: apiKey))
             let memoryLLM = OperatorLLMClient(
                 service: service,
-                configuration: ConversationConfiguration(modelType: .fast, maxTokens: 2048)
+                configuration: ConversationConfiguration(
+                    modelType: .fast,
+                    inference: .reasoning,
+                    maxTokens: 2048
+                )
             )
             let extractor = ContextExtractor(llm: memoryLLM)
             let analyzer = AnalysisRunner(llm: memoryLLM)
@@ -72,7 +76,7 @@ extension ChatState {
 
             let config = ConversationConfiguration(
                 modelType: .fast,
-                inference: .direct,
+                inference: .reasoning,
                 maxTokens: 4096
             )
 

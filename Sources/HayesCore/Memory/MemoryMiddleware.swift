@@ -26,6 +26,10 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
     /// good enough for single-user CLI. Swap for a real run ID when
     /// Operator exposes one.
     private var runContextNodeIDs: [String: [String]] = [:]
+    /// Most recent extractor output, fed back in as `priorPhrases` on the
+    /// next turn so the working context drifts smoothly across turns
+    /// instead of being re-inferred from scratch.
+    private var lastExtractedPhrases: [String] = []
 
     private let continuation: AsyncStream<MiddlewareEvent>.Continuation
     /// Stream of memory-pipeline events produced during middleware execution.
@@ -61,16 +65,27 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
     }
 
     public func beforeRequest(_ context: inout RequestContext) async throws {
-        if context.messages.contains(where: Self.isMemoryToolCall) {
-            return
-        }
-
         let window = Self.trimWindow(context.messages, size: config.contextWindowSize)
         guard !window.isEmpty else { return }
 
         guard let triggerKey = Self.runKey(from: window) else { return }
 
-        let phrases = try await extractor.extract(recentMessages: window)
+        // Per-turn idempotency: if this trigger has already been processed
+        // (inner tool-use rounds within the same turn), do nothing. This
+        // used to be gated on the presence of a memory tool call in the
+        // transcript, but that conflated "already processed this turn"
+        // with "turn 2 sees turn 1's persisted injection", which made
+        // `afterRun` start a new act with `seedIDs = []`.
+        let alreadyProcessed: Bool = lock.withLock {
+            runContextNodeIDs[triggerKey] != nil
+        }
+        if alreadyProcessed { return }
+
+        let priorPhrases: [String] = lock.withLock { lastExtractedPhrases }
+        let phrases = try await extractor.extract(
+            recentMessages: window,
+            priorPhrases: priorPhrases
+        )
 
         // Embed first so retrieval runs against the prior corpus. Otherwise
         // fresh phrases inserted before retrieval would surface as their
@@ -91,21 +106,29 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
 
         emit(.memoryInjected(seeds: result.seeds, behaviors: result.behaviors))
 
-        let payload = result.behaviors.map { scored in
-            BehaviorPayload(id: scored.value.id, text: scored.value.text, score: scored.score)
+        // If a memory tool exchange from a prior turn is already in the
+        // transcript (persisted by Operative back into the conversation),
+        // skip re-injection to avoid stacking. The LLM still sees the
+        // prior turn's exchange; we just track this turn's seeds for
+        // `afterRun`.
+        if !context.messages.contains(where: Self.isMemoryToolCall) {
+            let payload = result.behaviors.map { scored in
+                BehaviorPayload(id: scored.value.id, text: scored.value.text, score: scored.score)
+            }
+            // Anthropic's adapter requires tool-use `input` to decode as a
+            // JSON object. Wrap the phrases in a dict with a named key so
+            // the top-level encoding stays object-shaped regardless of how
+            // many phrases were inferred.
+            try context.appendToolExchange(
+                toolName: memoryToolName,
+                arguments: MemoryToolArguments(phrases: phrases),
+                result: ToolOutput(encoding: payload)
+            )
         }
-        // Anthropic's adapter requires tool-use `input` to decode as a JSON
-        // object. Wrap the phrases in a dict with a named key so the top-level
-        // encoding stays object-shaped regardless of how many phrases were
-        // inferred.
-        try context.appendToolExchange(
-            toolName: memoryToolName,
-            arguments: MemoryToolArguments(phrases: phrases),
-            result: ToolOutput(encoding: payload)
-        )
 
         lock.withLock {
             runContextNodeIDs[triggerKey] = contextNodes.map(\.id)
+            lastExtractedPhrases = phrases
         }
     }
 
@@ -154,6 +177,13 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
             behaviorNodeList.append(node)
         }
         emit(.movesExtracted(texts: result.moves))
+        if result.moves.isEmpty {
+            // The act is still created (seeds + empty behaviors), so the
+            // diagnostic is visible in the store, but surface it as a
+            // discrete event so the CLI doesn't have to infer from a
+            // blank `movesExtracted` that something went wrong.
+            emit(.analysisEmpty(reason: "analyzer returned empty moves"))
+        }
 
         let triggerKey = Self.runKey(from: context.messages)
         let seedIDs: [String] = lock.withLock {

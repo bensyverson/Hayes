@@ -21,6 +21,9 @@ extension ChatState {
             guard !texts.isEmpty else { return }
             append(banner: "Moves: \(texts.joined(separator: ", "))", color: .cyan)
 
+        case let .analysisEmpty(reason):
+            append(banner: "Analysis empty: \(reason)", color: .yellow)
+
         case let .userFeedback(list):
             guard !list.isEmpty else { return }
             let body = list.map(Self.format).joined(separator: ", ")

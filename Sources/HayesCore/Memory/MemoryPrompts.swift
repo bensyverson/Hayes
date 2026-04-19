@@ -22,6 +22,13 @@ public enum MemoryPrompts {
     given the conversation so far?
     List 3-5 short phrases describing the kind of work (domain, audience,
     aesthetic, project type). JSON array of strings only.
+
+    If the user message includes a CURRENT WORKING CONTEXT section with
+    prior phrases, treat this as a conversational revision rather than a
+    cold-start inference. Keep the zoomed-out framing; drop phrases that
+    are no longer load-bearing for the latest turn; add newly-relevant
+    phrases. Return the complete updated set (3-5 phrases total), not a
+    diff.
     """
 
     /// System prompt for ``AnalysisRunner``.
@@ -53,7 +60,13 @@ public enum MemoryPrompts {
     moves (3-5 items): short phrases (2-8 words each) naming:
       - Reusable techniques the agent used ("clamp() responsive typography").
       - Generalizations the agent articulated ("warmer colors for wellness brands").
-    Both kinds go in the same array.
+    Both kinds go in the same array. If the agent took any visible
+    action this turn — wrote code, produced an artifact, made a choice —
+    you MUST return at least one move naming the technique or choice.
+    Only return an empty moves array when the agent truly did nothing
+    worth naming (e.g. a pure clarifying question with no other action);
+    in that case include a trailing `"notes"` field explaining why.
+    The parser ignores unknown fields, so extra keys are safe.
 
     user_feedback: if the user's message attributes success or failure to
     any prior act in the recent_acts list, emit one entry per attributed
