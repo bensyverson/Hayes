@@ -403,4 +403,46 @@ struct MemoryMiddlewareTests {
         #expect(payload.contains("RECENT PENDING ACTS:"))
         #expect(payload.contains("(none)"))
     }
+
+    // MARK: - Scenario 10: phantom memory tool-call arguments must be a JSON object
+
+    @Test("phantom memory tool arguments serialize as a JSON object, not an array")
+    func phantomArgumentsAreObject() async throws {
+        // Anthropic's adapter refuses tool-use messages whose `input` does not
+        // decode as `[String: JSONValue]`. A top-level JSON array (from a
+        // `[String]` encode) trips it and surfaces as a DecodingError the
+        // user sees as "LLM error: The data couldn't be read…". Lock the
+        // object shape in.
+        let store = try GraphStore.inMemory()
+        let embeddings = FakeEmbeddingProvider()
+        let (middleware, _, _) = Self.makeMiddleware(
+            store: store,
+            embeddings: embeddings,
+            extractor: ["""
+            ["landing page design", "wellness brand"]
+            """],
+            analyzer: ["""
+            {"moves": [], "user_feedback": [], "self_assessment": []}
+            """]
+        )
+
+        var request = FakeTurn.request(messages: [FakeTurn.userMessage("Design a yoga studio site")])
+        try await middleware.beforeRequest(&request)
+
+        let toolCall = try #require(
+            request.messages.compactMap(\.toolCalls).flatMap { $0 }.first { $0.name == "memory" }
+        )
+        let data = Data(toolCall.arguments.utf8)
+        // Object shape: decodes as a dictionary.
+        let decoded = try JSONSerialization.jsonObject(with: data)
+        #expect(decoded is [String: Any])
+
+        // Named "phrases" key with the extracted values.
+        guard let dict = decoded as? [String: Any] else {
+            Issue.record("expected dictionary; got \(type(of: decoded))")
+            return
+        }
+        let phrases = try #require(dict["phrases"] as? [String])
+        #expect(phrases == ["landing page design", "wellness brand"])
+    }
 }

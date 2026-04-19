@@ -11,12 +11,19 @@ public struct AnalysisRunner: Sendable {
     private let llm: any LLMClient
 
     /// Raised when the analysis response cannot be parsed.
-    public struct InvalidJSON: Error, Sendable {
+    public struct InvalidJSON: Error, Sendable, LocalizedError {
         /// The raw response text that failed to parse.
         public let response: String
         /// Creates a new error.
         public init(response: String) {
             self.response = response
+        }
+
+        public var errorDescription: String? {
+            let snippet = response
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .prefix(280)
+            return "Analysis LLM returned non-conforming JSON: \(snippet)"
         }
     }
 

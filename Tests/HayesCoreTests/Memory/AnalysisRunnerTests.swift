@@ -92,4 +92,28 @@ struct AnalysisRunnerTests {
         let decoded = try JSONDecoder().decode(AnalysisResult.self, from: data)
         #expect(decoded == original)
     }
+
+    @Test("conversational preamble around the JSON body is stripped")
+    func preambleStripped() async throws {
+        let response = """
+        Here's my analysis:
+        {
+          "moves": ["m"],
+          "user_feedback": [],
+          "self_assessment": []
+        }
+        Hope that helps!
+        """
+        let mock = MockLLM(responses: [response])
+        let runner = AnalysisRunner(llm: mock)
+        let result = try await runner.analyze(userMessage: "", thinking: "", recentActs: [])
+        #expect(result.moves == ["m"])
+    }
+
+    @Test("InvalidJSON.errorDescription surfaces the raw response")
+    func invalidJSONDescription() {
+        let error = AnalysisRunner.InvalidJSON(response: "whatever the model said")
+        let description = error.errorDescription ?? ""
+        #expect(description.contains("whatever the model said"))
+    }
 }

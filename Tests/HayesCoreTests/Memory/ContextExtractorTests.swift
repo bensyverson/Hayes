@@ -63,6 +63,26 @@ struct ContextExtractorTests {
         #expect(phrases == ["a", "b"])
     }
 
+    @Test("conversational preamble / postamble around the JSON is stripped")
+    func preambleStripped() async throws {
+        let withPrelude = """
+        Sure! Here's the JSON array you asked for:
+        ["a", "b"]
+        Let me know if you need anything else.
+        """
+        let mock = MockLLM(responses: [withPrelude])
+        let extractor = ContextExtractor(llm: mock)
+        let phrases = try await extractor.extract(recentMessages: [FakeTurn.userMessage("x")])
+        #expect(phrases == ["a", "b"])
+    }
+
+    @Test("InvalidJSON.errorDescription surfaces the raw response")
+    func invalidJSONDescription() {
+        let error = ContextExtractor.InvalidJSON(response: "not json at all")
+        let description = error.errorDescription ?? ""
+        #expect(description.contains("not json at all"))
+    }
+
     @Test("empty recentMessages throws InvalidInput")
     func emptyRecentMessagesThrows() async throws {
         let mock = MockLLM(responses: ["[]"])

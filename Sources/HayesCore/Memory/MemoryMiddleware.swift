@@ -94,9 +94,13 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
         let payload = result.behaviors.map { scored in
             BehaviorPayload(id: scored.value.id, text: scored.value.text, score: scored.score)
         }
+        // Anthropic's adapter requires tool-use `input` to decode as a JSON
+        // object. Wrap the phrases in a dict with a named key so the top-level
+        // encoding stays object-shaped regardless of how many phrases were
+        // inferred.
         try context.appendToolExchange(
             toolName: memoryToolName,
-            arguments: phrases,
+            arguments: MemoryToolArguments(phrases: phrases),
             result: ToolOutput(encoding: payload)
         )
 
@@ -244,6 +248,15 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
         let id: String
         let text: String
         let score: Double
+    }
+
+    /// The shape of the synthetic `memory` tool-call's `arguments` field.
+    ///
+    /// Wraps the inferred phrases in an object so the JSON encoding stays
+    /// object-shaped — Anthropic's adapter requires tool-use inputs to
+    /// decode as `[String: JSONValue]` and rejects top-level arrays.
+    struct MemoryToolArguments: Encodable {
+        let phrases: [String]
     }
 }
 
