@@ -7,19 +7,36 @@ that experience back to the agent next time it faces a similar context.
 ## Packages
 
 - **`HayesCore`** — models, SQLite-backed graph store, embeddings, cosine
-  similarity, retrieval, and reinforcement. LLM-free and fully unit-tested.
-- **`hayes`** (`HayesCommand`) — the CLI that drives a design agent end to end.
-  Currently a stub; populated in a later phase.
+  similarity, retrieval, reinforcement, and the memory middleware / context
+  extraction / analysis pipeline. LLM-agnostic, fully unit-tested.
+- **`hayes`** (`HayesCommand`) — the CLI. A split-pane TextUI chat with a
+  live memory sidebar, backed by Claude Haiku and NativeCanvas as the tool
+  surface.
 
 ## Getting started
 
 Requires Swift 6.3 and macOS 15+.
 
 ```bash
-swift test           # runs the full HayesCore test suite
-swift build          # builds both targets
-swift run hayes      # runs the (stub) CLI
+swift test               # runs the full test suite
+swift build              # builds both targets
 ```
+
+### Running `hayes chat`
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-…
+swift run hayes chat
+```
+
+Optional flags:
+
+- `--db <PATH>` — override the SQLite graph store location. Defaults to
+  `~/.hayes/graph.sqlite`. Leading `~` is expanded against the user's home.
+
+Each `view_canvas` tool call writes the current render to
+`~/.hayes/canvas.png`; open it in a browser tab and refresh to watch the
+agent iterate.
 
 ## Documentation
 

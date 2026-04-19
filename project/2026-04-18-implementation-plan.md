@@ -382,6 +382,24 @@ Full suite: 253 tests passing; `swiftformat . --lint` clean; DocC builds (one pr
 
 **Estimated session length:** 2.5–3 hours.
 
+### Implementation notes (completed 2026-04-18)
+
+- Dependencies scoped to `HayesCommand` only: local paths `../TextUI` and `../NativeCanvas`, plus remote `swift-argument-parser` 1.5.0. `HayesCore` remains TextUI/NativeCanvas-free.
+- `ChatArguments: ParsableArguments` is invoked via `parseOrExit()` inside `HayesChatApp.init()`; the `@main` attribute stays on the TextUI `App` conformer. Single flag for v1: `--db <PATH>` (defaults to `~/.hayes/graph.sqlite`, leading `~` expanded).
+- `HayesPaths` centralises the `~/.hayes/` layout (root, `defaultDatabase`, `canvasImage`) with `ensureDirectory()` and `resolve(dbArgument:)`. Unit-tested (4 tests).
+- `CanvasCoordinator` is the slim coordinator described in the plan: `jsScript`, `viewport` (defaulted to 1024 × 1024), `lastRenderedPNG`, plus `setScript` / `editScript` / `readScript` / `render(to:)`. No scanning overlays, no cursor tracking, no history state. Unit-tested (3 tests).
+- `CanvasOperable` vendors & trims VibePDF's surface to four tools — `read_script`, `write_script`, `edit_script`, `view_canvas`. `view_canvas` renders to `~/.hayes/canvas.png` atomically and returns the bytes to the LLM as an `Operator.ContentPart.image`. No FoundationModels branch; Haiku's vision is assumed, tool is always registered.
+- `HayesSystemPrompt.text` is adapted from VibePDF's prompt with PDF/document framing stripped — "visual designer who produces images using NativeCanvas's JavaScript canvas DSL". Deliberately contains no `memory` / `recall` / `from_past_experience` tokens; covered by `HayesSystemPromptTests`.
+- Phantom `memory` tool is registered on the Operative via a private `MemoryPhantom: Operable` inside `ChatState+Setup.swift`. Description discourages invocation; fallback output is a harmless note pointing at the already-appended tool exchange.
+- `ChatState` is `@MainActor` with five `@Observed` properties (`messages`, `activatedSeeds`, `activatedBehaviors`, `topEdges`, `isStreaming`, `providerWarning`). `inputText` stays non-reactive — TextField manages its own EditState; marking it `@Observed` would cause a redundant second render on every keystroke (pattern taken from Operator's Chat example).
+- `ChatState.start()` wires `GraphStore` → `NLEmbeddingProvider` → `ContextExtractor` / `AnalysisRunner` (both sharing a single `OperatorLLMClient` around an Anthropic `LLMServiceAdapter` at `.fast` / Haiku) → `MemoryMiddleware`. The operative uses `.fast` / `.direct` / 4096 max tokens. Setup errors land in `providerWarning` instead of crashing.
+- Event-driven sidebar: a single `Task { @MainActor … }` drains `MemoryMiddleware.events` into `apply(_:)`. `memoryInjected` rewrites `activatedSeeds` / `activatedBehaviors`; `movesExtracted` / `userFeedback` / `selfAssessment` emit centered banners (empty lists skipped); `actCreated` triggers a re-query of `topEdgesByWeight(limit: 20)`.
+- Layout is `VStack { CommandBar; HStack { MainPaneView; Divider.vertical; SidebarView.frame(width: 40) } }`. Sidebar is fixed-width rather than proportional — simpler, and terminals ≥ 120 cols fit comfortably.
+- `SentimentColor` lives in the CLI target (depends on `TextUI.Style.Color`). Thresholds match the plan: sentiment `≥ 0.3` bright green, `≥ 0` green, `> -0.3` red, else bright red; edge weight `≥ 0.8` bright green, `≥ 0.5` yellow, `≥ 0.2` red, else bright black.
+- `view_canvas` tool output surfaces in the transcript as `[canvas rendered → /Users/…/canvas.png]` rather than the raw base64 text — the LLM still receives the image via the tool-output content part.
+- Tests: 4 new test files, 11 new tests (`HayesPathsTests`, `ChatArgumentsTests`, `HayesSystemPromptTests`, `CanvasCoordinatorTests`). Combined suite is **82 tests green**. UI / render code has no automated coverage; the manual smoke test (yoga studio → warmer palette) is the acceptance gate.
+- Lint clean (`swiftformat . --lint`). `ChatMessage.MessageRole` dropped an explicit `Sendable` conformance — the formatter's `redundantSendable` rule fires on non-public enums.
+
 ---
 
 ## Cross-Cutting Concerns
