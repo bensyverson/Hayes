@@ -22,11 +22,11 @@ swift test               # runs the full test suite
 swift build              # builds both targets
 ```
 
-### Running `hayes chat`
+### Running `hayes`
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-…
-swift run hayes chat
+swift run hayes
 ```
 
 Optional flags:
