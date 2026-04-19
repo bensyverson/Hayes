@@ -179,14 +179,14 @@ struct MemoryMiddlewareTests {
         let edgeA = try await store.findEdge(sourceID: seed.id, targetID: b1.id)
         let edgeB = try await store.findEdge(sourceID: seed.id, targetID: b2.id)
         #expect(abs((edgeA?.weight ?? 0) - 0.55) < 1e-9)
-        #expect(abs((edgeB?.weight ?? 0) - 0.45) < 1e-9)
+        #expect(abs((edgeB?.weight ?? 0) - 0.35) < 1e-9)
 
         let reloadA = try await store.findAct(id: actA.id)
         let reloadB = try await store.findAct(id: actB.id)
         #expect(reloadA?.status == .accepted)
         #expect(reloadB?.status == .revised)
 
-        let feedback = await Self.firstEvent(middleware) { event -> [ActFeedback]? in
+        let feedback = await Self.firstEvent(middleware) { event -> [MiddlewareEvent.AttributedFeedback]? in
             if case let .userFeedback(list) = event { return list }
             return nil
         }
@@ -225,7 +225,7 @@ struct MemoryMiddlewareTests {
         let reloaded = try await store.findAct(id: act.id)
         #expect(reloaded?.status == .accepted)
 
-        let feedback = await Self.firstEvent(middleware) { event -> [ActFeedback]? in
+        let feedback = await Self.firstEvent(middleware) { event -> [MiddlewareEvent.AttributedFeedback]? in
             if case let .selfAssessment(list) = event { return list }
             return nil
         }
@@ -404,6 +404,43 @@ struct MemoryMiddlewareTests {
         #expect(payload.contains("(none)"))
     }
 
+    // MARK: - Scenario 9b: feedback events carry human-readable act labels
+
+    @Test("userFeedback event includes the target act's behavior phrases as label")
+    func feedbackEventCarriesLabel() async throws {
+        let store = try GraphStore.inMemory()
+        let embeddings = FakeEmbeddingProvider()
+
+        let seed = try await store.insertNode(text: "seed", embedding: embeddings.embed("seed"))
+        let b1 = try await store.insertNode(text: "replaced Arial with Helvetica", embedding: embeddings.embed("b1"))
+        let b2 = try await store.insertNode(text: "verified with canvas preview", embedding: embeddings.embed("b2"))
+        let act = try await store.insertAct(seedIDs: [seed.id], behaviorIDs: [b1.id, b2.id])
+
+        let (middleware, _, _) = Self.makeMiddleware(
+            store: store,
+            embeddings: embeddings,
+            extractor: ["""
+            ["x"]
+            """],
+            analyzer: ["""
+            {"moves": [], "user_feedback": [{"act_id": "\(act.id)", "sentiment": 1.0}], "self_assessment": []}
+            """]
+        )
+
+        var req = FakeTurn.request(messages: [FakeTurn.userMessage("update")])
+        try await middleware.beforeRequest(&req)
+        try await middleware.afterRun(Self.userTurn())
+
+        let feedback = await Self.firstEvent(middleware) { event -> [MiddlewareEvent.AttributedFeedback]? in
+            if case let .userFeedback(list) = event { return list }
+            return nil
+        }
+        let entry = try #require(feedback?.first)
+        #expect(entry.actID == act.id)
+        #expect(entry.label == "replaced Arial with Helvetica, verified with canvas preview")
+        #expect(entry.sentiment == 1.0)
+    }
+
     // MARK: - Scenario 10: rolling phrases + persisted memory exchange
 
     @Test("turn 2 passes turn 1's phrases as priorPhrases and does not stack another memory exchange")
@@ -542,6 +579,147 @@ struct MemoryMiddlewareTests {
             #expect(!act.seedIDs.isEmpty, "every act should have seeds — regression for the zero-edges bug")
             #expect(!act.behaviorIDs.isEmpty)
         }
+    }
+
+    // MARK: - Scenario 14: bypassFirstRun defers extraction to afterRun
+
+    @Test("bypassFirstRun=true: first beforeRequest is a no-op, afterRun still tracks seeds")
+    func bypassFirstRunDefersToAfterRun() async throws {
+        let store = try GraphStore.inMemory()
+        let embeddings = FakeEmbeddingProvider()
+        let extractorLLM = MockLLM(responses: [
+            """
+            ["landing page design", "wellness brand"]
+            """,
+            """
+            ["landing page design", "warm palette"]
+            """,
+        ])
+        let analyzerLLM = MockLLM(responses: [
+            """
+            {"moves": ["m1"], "user_feedback": [], "self_assessment": []}
+            """,
+            """
+            {"moves": ["m2"], "user_feedback": [], "self_assessment": []}
+            """,
+        ])
+        let middleware = MemoryMiddleware(
+            store: store,
+            embeddings: embeddings,
+            extractor: ContextExtractor(llm: extractorLLM),
+            analyzer: AnalysisRunner(llm: analyzerLLM),
+            bypassFirstRun: true
+        )
+
+        // Run 1 — beforeRequest is bypassed; no extractor call, no tool inject.
+        var req1 = FakeTurn.request(messages: [FakeTurn.userMessage("Design a yoga site")])
+        try await middleware.beforeRequest(&req1)
+        #expect(req1.messages.count == 1)
+        #expect(extractorLLM.calls.isEmpty)
+
+        // afterRun runs extraction now so the act gets seeds.
+        try await middleware.afterRun(Operator.RunContext(
+            messages: [FakeTurn.userMessage("Design a yoga site"), FakeTurn.assistantMessage("ok")],
+            thinking: "",
+            finalText: "ok",
+            toolCalls: []
+        ))
+        #expect(extractorLLM.calls.count == 1)
+
+        let actsAfterFirst = try await store.recentActs(limit: 10)
+        #expect(actsAfterFirst.count == 1)
+        #expect(!actsAfterFirst[0].seedIDs.isEmpty)
+
+        // Run 2 — beforeRequest now runs normally (first-run flag flipped).
+        var req2 = FakeTurn.request(messages: [
+            FakeTurn.userMessage("Design a yoga site"),
+            FakeTurn.assistantMessage("ok"),
+            FakeTurn.userMessage("make it warmer"),
+        ])
+        try await middleware.beforeRequest(&req2)
+        #expect(extractorLLM.calls.count == 2)
+        let toolCalls = req2.messages.compactMap(\.toolCalls).flatMap { $0 }.filter { $0.name == "memory" }
+        #expect(toolCalls.count == 1, "run 2 should inject memory tool exchange normally")
+    }
+
+    // MARK: - Scenario 15: bypass + many tool rounds push user out of trimWindow
+
+    @Test("bypassFirstRun: afterRun still tracks seeds after many tool rounds")
+    func bypassFirstRunWithLongToolRun() async throws {
+        let store = try GraphStore.inMemory()
+        let embeddings = FakeEmbeddingProvider()
+        let extractorLLM = MockLLM(responses: ["""
+        ["healthy pet food", "minimal landing page"]
+        """])
+        let analyzerLLM = MockLLM(responses: ["""
+        {"moves": ["m1"], "user_feedback": [], "self_assessment": []}
+        """])
+        let middleware = MemoryMiddleware(
+            store: store,
+            embeddings: embeddings,
+            extractor: ContextExtractor(llm: extractorLLM),
+            analyzer: AnalysisRunner(llm: analyzerLLM),
+            bypassFirstRun: true
+        )
+
+        let toolResult = Operator.Message(
+            role: .tool,
+            content: [.text("ok")],
+            toolCallId: "call-X"
+        )
+        // Run 1 with enough tool back-and-forth that the user message
+        // falls outside a 5-message tail. This is the live-pipeline
+        // shape that unit tests with short message lists couldn't
+        // reproduce.
+        let runMessages: [Operator.Message] = [
+            FakeTurn.userMessage("Let's design a site for BARK"),
+            FakeTurn.assistantMessage("first action"),
+            toolResult,
+            FakeTurn.assistantMessage("second action"),
+            toolResult,
+            FakeTurn.assistantMessage("third action"),
+            toolResult,
+            FakeTurn.assistantMessage("final text"),
+        ]
+
+        var req = FakeTurn.request(messages: [runMessages[0]])
+        try await middleware.beforeRequest(&req)
+        #expect(extractorLLM.calls.isEmpty, "first-run beforeRequest should be a no-op")
+
+        try await middleware.afterRun(Operator.RunContext(
+            messages: runMessages,
+            thinking: "",
+            finalText: "final text",
+            toolCalls: []
+        ))
+
+        #expect(extractorLLM.calls.count == 1, "afterRun should extract context despite long tool history")
+        let acts = try await store.recentActs(limit: 10)
+        #expect(acts.count == 1)
+        #expect(!acts[0].seedIDs.isEmpty, "act should have seeds extracted in afterRun")
+    }
+
+    // MARK: - lastTurnMessages slicing
+
+    @Test("lastTurnMessages returns slice from most recent user turn")
+    func lastTurnSlicing() {
+        let toolResult = Operator.Message(
+            role: .tool,
+            content: [.text("tool output")],
+            toolCallId: "call-1"
+        )
+        let messages: [Operator.Message] = [
+            FakeTurn.userMessage("first"),
+            FakeTurn.assistantMessage("ok"),
+            FakeTurn.userMessage("second"),
+            FakeTurn.assistantMessage("calling tool"),
+            toolResult,
+            FakeTurn.assistantMessage("done"),
+        ]
+        let slice = MemoryMiddleware.lastTurnMessages(messages)
+        #expect(slice.count == 4)
+        #expect(slice.first?.textContent == "second")
+        #expect(slice.last?.textContent == "done")
     }
 
     // MARK: - Scenario 13: phantom memory tool-call arguments must be a JSON object

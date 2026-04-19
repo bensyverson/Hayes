@@ -35,8 +35,12 @@ struct GraphStoreCRUDTests {
         #expect(over.weight == 1.0)
 
         let c = try await store.insertNode(text: "c", embedding: [0.0])
-        let under = try await store.insertEdge(sourceID: a.id, targetID: c.id, weight: -0.5)
-        #expect(under.weight == 0.0)
+        let negative = try await store.insertEdge(sourceID: a.id, targetID: c.id, weight: -0.5)
+        #expect(negative.weight == -0.5)
+
+        let d = try await store.insertNode(text: "d", embedding: [0.0])
+        let under = try await store.insertEdge(sourceID: a.id, targetID: d.id, weight: -1.7)
+        #expect(under.weight == -1.0)
     }
 
     @Test("updateEdgeWeight clamps and persists")
@@ -51,8 +55,12 @@ struct GraphStoreCRUDTests {
         #expect(edges.first?.weight == 1.0)
 
         try await store.updateEdgeWeight(sourceID: a.id, targetID: b.id, weight: -0.2)
+        let signed = try await store.outgoingEdges(from: a.id)
+        #expect(signed.first?.weight == -0.2)
+
+        try await store.updateEdgeWeight(sourceID: a.id, targetID: b.id, weight: -3.0)
         let clamped = try await store.outgoingEdges(from: a.id)
-        #expect(clamped.first?.weight == 0.0)
+        #expect(clamped.first?.weight == -1.0)
     }
 
     @Test("outgoingEdges filters by source")

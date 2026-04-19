@@ -24,6 +24,12 @@ final class ChatState {
     /// Top edges by weight across the entire graph (displayed in the sidebar).
     @Observed var topEdges: [Edge] = []
 
+    /// Node ID → display text for every node referenced by a row in
+    /// ``topEdges``. Kept in sync by ``refreshTopEdges()`` so the
+    /// sidebar can render edge endpoints by their phrase instead of
+    /// an opaque short ID.
+    @Observed var edgeNodeNames: [String: String] = [:]
+
     /// Whether an agent run is currently streaming.
     @Observed var isStreaming: Bool = false
 

@@ -46,9 +46,17 @@ public enum MemoryPrompts {
     You are analyzing a single turn of an AI design agent.
 
     Input:
-    - The user's message.
-    - The agent's full thinking trace across all LLM calls in the turn.
-    - A list of recent pending acts (id + behavior phrases + timestamp).
+    - CONVERSATION: the full message slice for the current turn, as
+      JSON, starting from the most recent user message and including
+      every assistant reply, tool call, and tool result in order.
+      Binary content (images, PDFs, audio, video) is replaced with
+      short text placeholders like `[redacted image/png]`.
+    - THINKING TRACE: the agent's concatenated thinking across all
+      LLM calls in the turn. May be empty if the agent produced no
+      reasoning this turn — in which case infer what it did from the
+      CONVERSATION alone (especially tool calls and their arguments).
+    - RECENT PENDING ACTS: a list of prior pending acts
+      (id + behavior phrases + timestamp).
 
     Return JSON ONLY with this exact shape:
     {

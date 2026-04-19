@@ -26,12 +26,12 @@ extension ChatState {
 
         case let .userFeedback(list):
             guard !list.isEmpty else { return }
-            let body = list.map(Self.format).joined(separator: ", ")
+            let body = list.map(Self.format).joined(separator: "; ")
             append(banner: "User assessment: \(body)", color: SentimentColor.color(for: list))
 
         case let .selfAssessment(list):
             guard !list.isEmpty else { return }
-            let body = list.map(Self.format).joined(separator: ", ")
+            let body = list.map(Self.format).joined(separator: "; ")
             append(banner: "Self-assessment: \(body)", color: SentimentColor.color(for: list))
 
         case .actCreated:
@@ -48,7 +48,7 @@ extension ChatState {
         ))
     }
 
-    private static func format(_ entry: ActFeedback) -> String {
-        String(format: "%@:%+.1f", entry.actID, entry.sentiment)
+    private static func format(_ entry: MiddlewareEvent.AttributedFeedback) -> String {
+        String(format: "%@ (%+.1f)", entry.label, entry.sentiment)
     }
 }

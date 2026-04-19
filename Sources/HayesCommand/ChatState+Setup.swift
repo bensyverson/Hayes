@@ -55,14 +55,29 @@ extension ChatState {
                     maxTokens: 2048
                 )
             )
-            let extractor = ContextExtractor(llm: memoryLLM)
-            let analyzer = AnalysisRunner(llm: memoryLLM)
+            // In debug builds, tee every memory-stage call to a JSONL
+            // log at `~/.hayes/memory.log` so we can inspect the exact
+            // prompt / response for each extractor and analyzer call
+            // after a run. Release builds skip the wrapper.
+            let extractorLLM: any LLMClient
+            let analyzerLLM: any LLMClient
+            #if DEBUG
+                let writer = LoggingLLMClient.LogWriter(url: HayesPaths.memoryLog)
+                extractorLLM = LoggingLLMClient(wrapping: memoryLLM, stage: "extractor", writer: writer)
+                analyzerLLM = LoggingLLMClient(wrapping: memoryLLM, stage: "analyzer", writer: writer)
+            #else
+                extractorLLM = memoryLLM
+                analyzerLLM = memoryLLM
+            #endif
+            let extractor = ContextExtractor(llm: extractorLLM)
+            let analyzer = AnalysisRunner(llm: analyzerLLM)
 
             let middleware = MemoryMiddleware(
                 store: store,
                 embeddings: embeddings,
                 extractor: extractor,
-                analyzer: analyzer
+                analyzer: analyzer,
+                bypassFirstRun: true
             )
             memoryMiddleware = middleware
 
@@ -107,12 +122,19 @@ extension ChatState {
         }
     }
 
-    /// Re-reads the top edges and publishes them to the sidebar.
+    /// Re-reads the top edges and publishes them to the sidebar, along
+    /// with a fresh id→text map for every node referenced by those edges.
     func refreshTopEdges() {
         guard let store else { return }
         Task { @MainActor [weak self] in
             guard let edges = try? await store.topEdgesByWeight(limit: 20) else { return }
+            let ids: [String] = edges.flatMap { [$0.sourceID, $0.targetID] }.reduce(into: []) { acc, id in
+                if !acc.contains(id) { acc.append(id) }
+            }
+            let nodes = (try? await store.findNodes(ids: ids)) ?? []
+            let names = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0.text) })
             self?.topEdges = edges
+            self?.edgeNodeNames = names
         }
     }
 }

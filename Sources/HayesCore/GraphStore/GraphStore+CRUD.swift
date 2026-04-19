@@ -43,7 +43,7 @@ public extension GraphStore {
         }
     }
 
-    /// Inserts a new edge. Weight is clamped to `[0.0, 1.0]`.
+    /// Inserts a new edge. Weight is clamped to `[-1.0, 1.0]`.
     /// - Parameters:
     ///   - sourceID: The source node identifier.
     ///   - targetID: The target node identifier.
@@ -63,7 +63,7 @@ public extension GraphStore {
         return Edge(sourceID: sourceID, targetID: targetID, weight: clamped, updatedAt: now)
     }
 
-    /// Updates the weight of an existing edge. Weight is clamped to `[0.0, 1.0]`.
+    /// Updates the weight of an existing edge. Weight is clamped to `[-1.0, 1.0]`.
     /// - Parameters:
     ///   - sourceID: The source node identifier.
     ///   - targetID: The target node identifier.
@@ -225,7 +225,7 @@ public extension GraphStore {
 
 extension GraphStore {
     /// Fetches multiple nodes by ID in a single query.
-    func findNodes(ids: [String]) throws -> [Node] {
+    public func findNodes(ids: [String]) throws -> [Node] {
         guard !ids.isEmpty else { return [] }
         return try database.read { db in
             let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")

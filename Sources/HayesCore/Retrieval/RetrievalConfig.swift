@@ -14,10 +14,16 @@ public struct RetrievalConfig: Friendly {
     public var topBehaviors: Int
     /// Minimum edge weight required for an edge to participate in traversal.
     public var minEdgeWeight: Double
-    /// Positive-feedback step size: `w' = min(1, w + posDelta · sentiment · sourceScale)`.
-    public var posDelta: Double
-    /// Negative-feedback decay factor: `w' = max(0, w · (1 − negDecay · |sentiment| · sourceScale))`.
-    public var negDecay: Double
+    /// How strongly feedback pulls an edge toward the sentiment's extreme.
+    ///
+    /// Applied as `w' = w + feedbackRate · sentiment · sourceScale · (sign(sentiment) − w)`,
+    /// an exponential-moving-average step that interpolates the existing
+    /// weight toward `+1` (praise) or `−1` (criticism). The update is
+    /// larger when the current weight is far from the target and smaller
+    /// as it approaches, so weights saturate smoothly at `±1`.
+    ///
+    /// Zero sentiment is a no-op: no edge inserted, no update.
+    public var feedbackRate: Double
     /// Trust scale applied to user feedback.
     public var userFeedbackScale: Double
     /// Trust scale applied to agent self-assessment.
@@ -34,8 +40,8 @@ public struct RetrievalConfig: Friendly {
     ///   - topSeeds: Maximum seeds to surface. Default `5`.
     ///   - topBehaviors: Maximum behaviors to surface. Default `5`.
     ///   - minEdgeWeight: Minimum edge weight considered. Default `0.1`.
-    ///   - posDelta: Positive-feedback step size. Default `0.05`.
-    ///   - negDecay: Negative-feedback decay factor. Default `0.10`.
+    ///   - feedbackRate: Interpolation rate toward `±1` per feedback.
+    ///     Default `0.10`.
     ///   - userFeedbackScale: User-feedback trust scale. Default `1.0`.
     ///   - selfAssessmentScale: Self-assessment trust scale. Default `0.3`.
     ///   - recentActsWindow: Recent-acts window. Default `50`.
@@ -47,8 +53,7 @@ public struct RetrievalConfig: Friendly {
         topSeeds: Int = 5,
         topBehaviors: Int = 5,
         minEdgeWeight: Double = 0.1,
-        posDelta: Double = 0.05,
-        negDecay: Double = 0.10,
+        feedbackRate: Double = 0.10,
         userFeedbackScale: Double = 1.0,
         selfAssessmentScale: Double = 0.3,
         recentActsWindow: Int = 50,
@@ -59,8 +64,7 @@ public struct RetrievalConfig: Friendly {
         self.topSeeds = topSeeds
         self.topBehaviors = topBehaviors
         self.minEdgeWeight = minEdgeWeight
-        self.posDelta = posDelta
-        self.negDecay = negDecay
+        self.feedbackRate = feedbackRate
         self.userFeedbackScale = userFeedbackScale
         self.selfAssessmentScale = selfAssessmentScale
         self.recentActsWindow = recentActsWindow

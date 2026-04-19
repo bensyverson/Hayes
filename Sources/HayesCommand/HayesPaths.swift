@@ -17,6 +17,10 @@ enum HayesPaths {
     /// The most recently rendered canvas image, `~/.hayes/canvas.png`.
     static let canvasImage: URL = root.appendingPathComponent("canvas.png")
 
+    /// The JSONL debug log of memory-stage LLM calls,
+    /// `~/.hayes/memory.log`. Only written when `DEBUG` is set.
+    static let memoryLog: URL = root.appendingPathComponent("memory.log")
+
     /// Creates ``root`` if it does not already exist. Idempotent.
     static func ensureDirectory() throws {
         try FileManager.default.createDirectory(

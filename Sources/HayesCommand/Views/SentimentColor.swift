@@ -24,23 +24,25 @@ enum SentimentColor {
     /// Color derived from the average sentiment of a feedback list.
     ///
     /// Empty lists resolve to white.
-    static func color(for feedback: [ActFeedback]) -> Style.Color {
+    static func color(for feedback: [MiddlewareEvent.AttributedFeedback]) -> Style.Color {
         guard !feedback.isEmpty else { return .white }
         let avg = feedback.map(\.sentiment).reduce(0, +) / Double(feedback.count)
         return color(for: avg)
     }
 
-    /// Color for an edge weight in `[0, 1]`.
+    /// Color for a signed edge weight in `[-1, 1]`.
     ///
     /// Thresholds:
-    /// - `>= 0.8` → bright green
-    /// - `>= 0.5` → yellow
-    /// - `>= 0.2` → red
-    /// - else → bright black (dim)
+    /// - `>= 0.6` → bright green (strongly reinforced)
+    /// - `>= 0.2` → green
+    /// - `> -0.2` → bright black (weak / neutral)
+    /// - `> -0.6` → red
+    /// - else → bright red (strongly avoided)
     static func color(forEdgeWeight weight: Double) -> Style.Color {
-        if weight >= 0.8 { return .brightGreen }
-        if weight >= 0.5 { return .yellow }
-        if weight >= 0.2 { return .red }
-        return .brightBlack
+        if weight >= 0.6 { return .brightGreen }
+        if weight >= 0.2 { return .green }
+        if weight > -0.2 { return .brightBlack }
+        if weight > -0.6 { return .red }
+        return .brightRed
     }
 }

@@ -104,9 +104,15 @@ public actor GraphStore {
 }
 
 extension Double {
-    /// Returns `self` clamped to `[0.0, 1.0]`.
+    /// Returns `self` clamped to the signed weight range `[-1.0, 1.0]`.
+    ///
+    /// Edge weights are signed: `+1` = strong "do this pair," `−1` =
+    /// strong "avoid this pair," `0` = no evidence. Retrieval applies
+    /// its own positive floor (``RetrievalConfig/minEdgeWeight``) when
+    /// surfacing "do-this" edges; negative weights sit in the graph as
+    /// latent avoid-signal.
     var clampedToUnit: Double {
-        min(1.0, max(0.0, self))
+        min(1.0, max(-1.0, self))
     }
 }
 
