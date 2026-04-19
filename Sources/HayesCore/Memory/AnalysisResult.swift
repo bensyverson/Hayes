@@ -43,11 +43,4 @@ public struct AnalysisResult: Friendly {
         userFeedback = try container.decodeIfPresent([ActFeedback].self, forKey: .userFeedback) ?? []
         selfAssessment = try container.decodeIfPresent([ActFeedback].self, forKey: .selfAssessment) ?? []
     }
-
-    public func encode(to encoder: any Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(moves, forKey: .moves)
-        try container.encode(userFeedback, forKey: .userFeedback)
-        try container.encode(selfAssessment, forKey: .selfAssessment)
-    }
 }

@@ -9,7 +9,6 @@ import Foundation
 /// ``MemoryPrompts/analysis`` for the prompt.
 public struct AnalysisRunner: Sendable {
     private let llm: any LLMClient
-    private let now: @Sendable () -> Date
 
     /// Raised when the analysis response cannot be parsed.
     public struct InvalidJSON: Error, Sendable {
@@ -47,15 +46,9 @@ public struct AnalysisRunner: Sendable {
     }
 
     /// Creates a new runner.
-    /// - Parameters:
-    ///   - llm: The LLM client used for the analysis call.
-    ///   - now: Clock override used when formatting recent-act timestamps.
-    public init(
-        llm: any LLMClient,
-        now: @escaping @Sendable () -> Date = { Date() }
-    ) {
+    /// - Parameter llm: The LLM client used for the analysis call.
+    public init(llm: any LLMClient) {
         self.llm = llm
-        self.now = now
     }
 
     /// Runs analysis over a completed turn.
@@ -73,8 +66,7 @@ public struct AnalysisRunner: Sendable {
         let payload = AnalysisRunner.formatPayload(
             userMessage: userMessage,
             thinking: thinking,
-            recentActs: recentActs,
-            referenceDate: now()
+            recentActs: recentActs
         )
         let raw = try await llm.complete(
             systemPrompt: MemoryPrompts.analysis,
@@ -86,16 +78,13 @@ public struct AnalysisRunner: Sendable {
     static func formatPayload(
         userMessage: String,
         thinking: String,
-        recentActs: [RecentActSummary],
-        referenceDate: Date
+        recentActs: [RecentActSummary]
     ) -> String {
         let actsLines: String = if recentActs.isEmpty {
             "(none)"
         } else {
             recentActs.map { act in
-                let ageSeconds = Int(referenceDate.timeIntervalSince(act.createdAt))
-                let behaviors = act.behaviors.joined(separator: ", ")
-                return "- \(act.id) [\(ageSeconds)s ago]: \(behaviors)"
+                "- \(act.id): \(act.behaviors.joined(separator: ", "))"
             }.joined(separator: "\n")
         }
 
@@ -112,7 +101,7 @@ public struct AnalysisRunner: Sendable {
     }
 
     static func parse(_ raw: String) throws -> AnalysisResult {
-        let stripped = ContextExtractor.stripFences(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        let stripped = stripJSONFences(raw)
         guard let data = stripped.data(using: .utf8) else {
             throw InvalidJSON(response: raw)
         }

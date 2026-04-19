@@ -71,19 +71,13 @@ public struct ContextExtractor: Sendable {
 
     static func formatTranscript(_ messages: [Operator.Message]) -> String {
         messages.compactMap { message -> String? in
-            let label = switch message.role {
-            case .user: "user"
-            case .assistant: "assistant"
-            case .system: "system"
-            case .tool: "tool"
-            }
             guard let text = message.textContent, !text.isEmpty else { return nil }
-            return "\(label): \(text)"
+            return "\(message.role.rawValue): \(text)"
         }.joined(separator: "\n")
     }
 
     static func parse(_ raw: String) throws -> [String] {
-        let stripped = stripFences(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        let stripped = stripJSONFences(raw)
         guard let data = stripped.data(using: .utf8) else {
             throw InvalidJSON(response: raw)
         }
@@ -92,20 +86,5 @@ public struct ContextExtractor: Sendable {
         } catch {
             throw InvalidJSON(response: raw)
         }
-    }
-
-    static func stripFences(_ text: String) -> String {
-        var s = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if s.hasPrefix("```") {
-            if let firstNewline = s.firstIndex(of: "\n") {
-                s = String(s[s.index(after: firstNewline)...])
-            } else {
-                s = String(s.dropFirst(3))
-            }
-        }
-        if s.hasSuffix("```") {
-            s = String(s.dropLast(3))
-        }
-        return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

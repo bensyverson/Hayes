@@ -1,8 +1,6 @@
 import Foundation
 import Operator
 
-/// The tool name used for the synthetic tool-exchange injected into the
-/// conversation in ``MemoryMiddleware/beforeRequest(_:)``.
 private let memoryToolName = "memory"
 
 /// `Operator.Middleware` that wires Hayes's memory pipeline around a run.
@@ -15,11 +13,6 @@ private let memoryToolName = "memory"
 ///   `user_feedback` / `self_assessment` attributions to prior acts, inserts
 ///   behavior nodes for any `moves`, and creates a new pending act for the
 ///   current turn.
-///
-/// The middleware is `final class ... @unchecked Sendable` — matching the
-/// ``NLEmbeddingProvider`` pattern — so it can hold per-run mutable state
-/// behind an `NSLock`. An actor would force double isolation-hops into
-/// ``GraphStore``.
 public final class MemoryMiddleware: Middleware, @unchecked Sendable {
     private let store: GraphStore
     private let embeddings: any EmbeddingProvider
@@ -28,8 +21,10 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
     private let config: RetrievalConfig
 
     private let lock = NSLock()
-    /// Per-run context-node-ID map. Keyed by SHA256-short of the triggering
-    /// user message. Written in `beforeRequest`, read + cleared in `afterRun`.
+    /// Carries context-node IDs from `beforeRequest` to the matching
+    /// `afterRun`. Key is a stable hash of the triggering user message —
+    /// good enough for single-user CLI. Swap for a real run ID when
+    /// Operator exposes one.
     private var runContextNodeIDs: [String: [String]] = [:]
 
     private let continuation: AsyncStream<MiddlewareEvent>.Continuation
@@ -66,8 +61,6 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
     }
 
     public func beforeRequest(_ context: inout RequestContext) async throws {
-        // Idempotence: if a prior call already injected the synthetic `memory`
-        // tool exchange, no-op.
         if context.messages.contains(where: Self.isMemoryToolCall) {
             return
         }
@@ -79,9 +72,9 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
 
         let phrases = try await extractor.extract(recentMessages: window)
 
-        // Embed first so we can retrieve against prior corpus state before
-        // inserting new context nodes. This keeps the new phrases from
-        // retrieving themselves as seeds in an empty or near-empty graph.
+        // Embed first so retrieval runs against the prior corpus. Otherwise
+        // fresh phrases inserted before retrieval would surface as their
+        // own seeds in an empty or near-empty graph.
         let phraseEmbeddings = try phrases.map { try embeddings.embed($0) }
 
         let result = try await store.retrieve(
@@ -89,19 +82,22 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
             config: config
         )
 
+        var snapshot = await store.embeddingSnapshot()
         var contextNodes: [Node] = []
         for (phrase, embedding) in zip(phrases, phraseEmbeddings) {
-            let node = try await ensureNode(text: phrase, embedding: embedding)
+            let node = try await ensureNode(text: phrase, embedding: embedding, in: &snapshot)
             contextNodes.append(node)
         }
 
         emit(.memoryInjected(seeds: result.seeds, behaviors: result.behaviors))
 
-        let behaviorsJSON = try Self.encodeBehaviors(result.behaviors)
+        let payload = result.behaviors.map { scored in
+            BehaviorPayload(id: scored.value.id, text: scored.value.text, score: scored.score)
+        }
         try context.appendToolExchange(
             toolName: memoryToolName,
             arguments: phrases,
-            result: .init(behaviorsJSON)
+            result: ToolOutput(encoding: payload)
         )
 
         lock.withLock {
@@ -136,38 +132,21 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
             recentActs: summaries
         )
 
-        for feedback in result.userFeedback {
-            do {
-                try await store.applyFeedback(
-                    actID: feedback.actID,
-                    sentiment: feedback.sentiment,
-                    sourceScale: config.userFeedbackScale,
-                    config: config
-                )
-            } catch GraphStore.Error.actNotFound {
-                continue
-            }
-        }
+        // Sequential by design: each call mutates the same `GraphStore`
+        // actor, so parallelism would collapse to serialization anyway and
+        // ordering would become nondeterministic. User feedback runs first
+        // so it wins the once-feedback-per-act race against self-assessment.
+        try await applyFeedback(result.userFeedback, scale: config.userFeedbackScale)
         emit(.userFeedback(result.userFeedback))
 
-        for feedback in result.selfAssessment {
-            do {
-                try await store.applyFeedback(
-                    actID: feedback.actID,
-                    sentiment: feedback.sentiment,
-                    sourceScale: config.selfAssessmentScale,
-                    config: config
-                )
-            } catch GraphStore.Error.actNotFound {
-                continue
-            }
-        }
+        try await applyFeedback(result.selfAssessment, scale: config.selfAssessmentScale)
         emit(.selfAssessment(result.selfAssessment))
 
+        var snapshot = await store.embeddingSnapshot()
         var behaviorNodeList: [Node] = []
         for move in result.moves {
             let embedding = try embeddings.embed(move)
-            let node = try await ensureNode(text: move, embedding: embedding)
+            let node = try await ensureNode(text: move, embedding: embedding, in: &snapshot)
             behaviorNodeList.append(node)
         }
         emit(.movesExtracted(texts: result.moves))
@@ -189,8 +168,26 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
         continuation.yield(event)
     }
 
-    private func ensureNode(text: String, embedding: [Float]) async throws -> Node {
-        let snapshot = await store.embeddingSnapshot()
+    private func applyFeedback(_ feedback: [ActFeedback], scale: Double) async throws {
+        for entry in feedback {
+            do {
+                try await store.applyFeedback(
+                    actID: entry.actID,
+                    sentiment: entry.sentiment,
+                    sourceScale: scale,
+                    config: config
+                )
+            } catch GraphStore.Error.actNotFound {
+                continue
+            }
+        }
+    }
+
+    private func ensureNode(
+        text: String,
+        embedding: [Float],
+        in snapshot: inout [String: [Float]]
+    ) async throws -> Node {
         var bestID: String?
         var bestSim: Float = -.infinity
         for (id, candidate) in snapshot where candidate.count == embedding.count {
@@ -200,18 +197,19 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
                 bestID = id
             }
         }
-        if let bestID, bestSim >= config.dedupThreshold {
-            if let existing = try await store.findNode(id: bestID) {
-                return existing
-            }
+        if let bestID, bestSim >= config.dedupThreshold,
+           let existing = try await store.findNode(id: bestID)
+        {
+            return existing
         }
-        return try await store.insertNode(text: text, embedding: embedding)
+        let inserted = try await store.insertNode(text: text, embedding: embedding)
+        snapshot[inserted.id] = embedding
+        return inserted
     }
 
     static func trimWindow(_ messages: [Operator.Message], size: Int) -> [Operator.Message] {
         guard size > 0 else { return [] }
         let tail = Array(messages.suffix(size))
-        // Trim leading assistant turns so the window starts on user when possible.
         if let firstUser = tail.firstIndex(where: { $0.role == .user }) {
             return Array(tail[firstUser...])
         }
@@ -233,22 +231,13 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
     }
 
     static func shortHash(_ text: String) -> String {
-        // Non-crypto stable hash — SHA-free to keep HayesCore dependency-light.
-        // Collisions are vanishingly unlikely for single-user CLI traffic; if
-        // Operator later exposes a stable run ID, swap this out.
+        // `Hasher` is per-process-seeded, which is fine: the map's lifetime
+        // is a single process. If state is ever persisted or a stable run
+        // ID becomes available, revisit.
         var hasher = Hasher()
         hasher.combine(text)
         let value = UInt(bitPattern: hasher.finalize())
         return String(value, radix: 16)
-    }
-
-    static func encodeBehaviors(_ behaviors: [RetrievalResult.Scored<Node>]) throws -> String {
-        if behaviors.isEmpty { return "{}" }
-        let payload = behaviors.map { scored in
-            BehaviorPayload(id: scored.value.id, text: scored.value.text, score: scored.score)
-        }
-        let data = try JSONEncoder().encode(payload)
-        return String(decoding: data, as: UTF8.self)
     }
 
     private struct BehaviorPayload: Encodable {
@@ -266,12 +255,5 @@ private extension Array where Element: Hashable {
             out.append(item)
         }
         return out
-    }
-}
-
-private extension NSLock {
-    func withLock<Value>(_ body: () -> Value) -> Value {
-        lock(); defer { unlock() }
-        return body()
     }
 }
