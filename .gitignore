@@ -7,3 +7,7 @@ DerivedData/
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
 .env
+.claude/
+.jobs.db
+.jobs.db-shm
+.jobs.db-wal

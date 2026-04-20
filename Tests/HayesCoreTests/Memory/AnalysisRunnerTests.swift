@@ -5,72 +5,68 @@ import Testing
 
 @Suite("AnalysisRunner")
 struct AnalysisRunnerTests {
-    @Test("canonical response parses all three keys")
+    @Test("canonical response parses lessons with both sources")
     func canonicalResponse() async throws {
         let response = """
         {
-          "moves": ["clamp() responsive typography", "warmer colors for wellness brands"],
-          "user_feedback": [{"act_id": "a1", "sentiment": 0.7}],
-          "self_assessment": [{"act_id": "a2", "sentiment": -0.3}]
+          "lessons": [
+            {"seed": "wellness brand website", "behavior": "clamp() responsive typography", "sentiment": 0.7, "source": "user"},
+            {"seed": "wellness brand website", "behavior": "warmer color palette", "sentiment": -0.3, "source": "self_assessment"}
+          ]
         }
         """
         let mock = MockLLM(responses: [response])
         let runner = AnalysisRunner(llm: mock)
         let result = try await runner.analyze(
             messages: [FakeTurn.userMessage("looks great")],
-            thinking: "I used clamp() for scaling; wellness brands want warmer colors.",
-            recentActs: []
+            thinking: "I used clamp() for scaling; wellness brands want warmer colors."
         )
-        #expect(result.moves == [
-            "clamp() responsive typography",
-            "warmer colors for wellness brands",
-        ])
-        #expect(result.userFeedback == [ActFeedback(actID: "a1", sentiment: 0.7)])
-        #expect(result.selfAssessment == [ActFeedback(actID: "a2", sentiment: -0.3)])
+        #expect(result.lessons.count == 2)
+        #expect(result.lessons[0] == Lesson(
+            seed: "wellness brand website",
+            behavior: "clamp() responsive typography",
+            sentiment: 0.7,
+            source: .user
+        ))
+        #expect(result.lessons[1] == Lesson(
+            seed: "wellness brand website",
+            behavior: "warmer color palette",
+            sentiment: -0.3,
+            source: .selfAssessment
+        ))
     }
 
-    @Test("empty feedback lists parse as empty arrays")
-    func emptyFeedbackArrays() async throws {
+    @Test("empty lessons list parses as empty array")
+    func emptyLessons() async throws {
         let response = """
-        {"moves": ["m"], "user_feedback": [], "self_assessment": []}
+        {"lessons": []}
         """
         let mock = MockLLM(responses: [response])
         let runner = AnalysisRunner(llm: mock)
-        let result = try await runner.analyze(messages: [], thinking: "", recentActs: [])
-        #expect(result.userFeedback.isEmpty)
-        #expect(result.selfAssessment.isEmpty)
+        let result = try await runner.analyze(messages: [], thinking: "")
+        #expect(result.lessons.isEmpty)
     }
 
-    @Test("null feedback lists parse as empty arrays")
-    func nullFeedbackLists() async throws {
+    @Test("null lessons list parses as empty array")
+    func nullLessonsList() async throws {
         let response = """
-        {"moves": ["m"], "user_feedback": null, "self_assessment": null}
+        {"lessons": null}
         """
         let mock = MockLLM(responses: [response])
         let runner = AnalysisRunner(llm: mock)
-        let result = try await runner.analyze(messages: [], thinking: "", recentActs: [])
-        #expect(result.userFeedback.isEmpty)
-        #expect(result.selfAssessment.isEmpty)
-        #expect(result.moves == ["m"])
+        let result = try await runner.analyze(messages: [], thinking: "")
+        #expect(result.lessons.isEmpty)
     }
 
-    @Test("generalization phrases in thinking can surface as moves")
-    func generalizationInMoves() async throws {
+    @Test("missing lessons key parses as empty array")
+    func missingLessonsKey() async throws {
         let response = """
-        {
-          "moves": ["warmer colors for wellness brands"],
-          "user_feedback": [],
-          "self_assessment": []
-        }
+        {}
         """
         let mock = MockLLM(responses: [response])
         let runner = AnalysisRunner(llm: mock)
-        let result = try await runner.analyze(
-            messages: [FakeTurn.userMessage("make it warmer")],
-            thinking: "Wellness brands tend to want warmer palettes; I'll pick terracotta.",
-            recentActs: []
-        )
-        #expect(result.moves.contains("warmer colors for wellness brands"))
+        let result = try await runner.analyze(messages: [], thinking: "")
+        #expect(result.lessons.isEmpty)
     }
 
     @Test("malformed JSON throws InvalidJSON")
@@ -78,17 +74,16 @@ struct AnalysisRunnerTests {
         let mock = MockLLM(responses: ["not json"])
         let runner = AnalysisRunner(llm: mock)
         await #expect(throws: AnalysisRunner.InvalidJSON.self) {
-            _ = try await runner.analyze(messages: [], thinking: "", recentActs: [])
+            _ = try await runner.analyze(messages: [], thinking: "")
         }
     }
 
     @Test("Codable round-trip preserves AnalysisResult")
     func codableRoundTrip() throws {
-        let original = AnalysisResult(
-            moves: ["a", "b"],
-            userFeedback: [ActFeedback(actID: "x", sentiment: 0.5)],
-            selfAssessment: [ActFeedback(actID: "y", sentiment: -0.1)]
-        )
+        let original = AnalysisResult(lessons: [
+            Lesson(seed: "s1", behavior: "b1", sentiment: 0.5, source: .user),
+            Lesson(seed: "s2", behavior: "b2", sentiment: -0.1, source: .selfAssessment),
+        ])
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(AnalysisResult.self, from: data)
         #expect(decoded == original)
@@ -99,16 +94,17 @@ struct AnalysisRunnerTests {
         let response = """
         Here's my analysis:
         {
-          "moves": ["m"],
-          "user_feedback": [],
-          "self_assessment": []
+          "lessons": [
+            {"seed": "s", "behavior": "b", "sentiment": 0.4, "source": "user"}
+          ]
         }
         Hope that helps!
         """
         let mock = MockLLM(responses: [response])
         let runner = AnalysisRunner(llm: mock)
-        let result = try await runner.analyze(messages: [], thinking: "", recentActs: [])
-        #expect(result.moves == ["m"])
+        let result = try await runner.analyze(messages: [], thinking: "")
+        #expect(result.lessons.count == 1)
+        #expect(result.lessons[0].behavior == "b")
     }
 
     @Test("InvalidJSON.errorDescription surfaces the raw response")
@@ -121,7 +117,7 @@ struct AnalysisRunnerTests {
     @Test("conversation JSON reaches the analyzer prompt")
     func conversationJSONInPayload() async throws {
         let response = """
-        {"moves": [], "user_feedback": [], "self_assessment": []}
+        {"lessons": []}
         """
         let mock = MockLLM(responses: [response])
         let runner = AnalysisRunner(llm: mock)
@@ -130,8 +126,7 @@ struct AnalysisRunnerTests {
                 FakeTurn.userMessage("design a logo"),
                 FakeTurn.assistantMessage("I'll use a serif wordmark."),
             ],
-            thinking: "",
-            recentActs: []
+            thinking: ""
         )
         let payload = mock.calls[0].userMessage
         #expect(payload.contains("CONVERSATION"))
@@ -139,10 +134,28 @@ struct AnalysisRunnerTests {
         #expect(payload.contains("serif wordmark"))
     }
 
+    /// The new payload format has no RECENT PENDING ACTS section — the
+    /// analyzer no longer attributes against a candidate act list.
+    @Test("payload omits the retired RECENT PENDING ACTS section")
+    func noRecentActsSection() async throws {
+        let response = """
+        {"lessons": []}
+        """
+        let mock = MockLLM(responses: [response])
+        let runner = AnalysisRunner(llm: mock)
+        _ = try await runner.analyze(
+            messages: [FakeTurn.userMessage("hi")],
+            thinking: ""
+        )
+        let payload = mock.calls[0].userMessage
+        #expect(!payload.contains("RECENT PENDING ACTS"))
+        #expect(!payload.contains("recent_acts"))
+    }
+
     @Test("large tool-call arguments are truncated")
     func toolCallArgumentsTruncated() async throws {
         let response = """
-        {"moves": [], "user_feedback": [], "self_assessment": []}
+        {"lessons": []}
         """
         let mock = MockLLM(responses: [response])
         let runner = AnalysisRunner(llm: mock)
@@ -166,8 +179,7 @@ struct AnalysisRunnerTests {
                 FakeTurn.userMessage("make art"),
                 assistantCall,
             ],
-            thinking: "",
-            recentActs: []
+            thinking: ""
         )
         let payload = mock.calls[0].userMessage
         #expect(payload.contains("write_script"))
@@ -178,7 +190,7 @@ struct AnalysisRunnerTests {
     @Test("large tool-result text content is truncated")
     func toolResultTextTruncated() async throws {
         let response = """
-        {"moves": [], "user_feedback": [], "self_assessment": []}
+        {"lessons": []}
         """
         let mock = MockLLM(responses: [response])
         let runner = AnalysisRunner(llm: mock)
@@ -195,8 +207,7 @@ struct AnalysisRunnerTests {
                 FakeTurn.userMessage("read it"),
                 toolResult,
             ],
-            thinking: "",
-            recentActs: []
+            thinking: ""
         )
         let payload = mock.calls[0].userMessage
         #expect(payload.contains("chars elided"))
@@ -206,7 +217,7 @@ struct AnalysisRunnerTests {
     @Test("short tool-result text passes through untruncated")
     func shortToolResultPassesThrough() async throws {
         let response = """
-        {"moves": [], "user_feedback": [], "self_assessment": []}
+        {"lessons": []}
         """
         let mock = MockLLM(responses: [response])
         let runner = AnalysisRunner(llm: mock)
@@ -217,8 +228,7 @@ struct AnalysisRunnerTests {
         )
         _ = try await runner.analyze(
             messages: [FakeTurn.userMessage("go"), shortResult],
-            thinking: "",
-            recentActs: []
+            thinking: ""
         )
         let payload = mock.calls[0].userMessage
         #expect(payload.contains("Script written successfully."))
@@ -228,7 +238,7 @@ struct AnalysisRunnerTests {
     @Test("image content parts are redacted in the payload")
     func imagesRedacted() async throws {
         let response = """
-        {"moves": [], "user_feedback": [], "self_assessment": []}
+        {"lessons": []}
         """
         let mock = MockLLM(responses: [response])
         let runner = AnalysisRunner(llm: mock)
@@ -245,13 +255,11 @@ struct AnalysisRunnerTests {
 
         _ = try await runner.analyze(
             messages: [messageWithImage],
-            thinking: "",
-            recentActs: []
+            thinking: ""
         )
         let payload = mock.calls[0].userMessage
         #expect(payload.contains("[redacted image/png"))
         #expect(payload.contains("canvas.png"))
-        // Ensure the raw base64 never leaks into the payload.
         #expect(!payload.contains(base64))
     }
 }

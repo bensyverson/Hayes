@@ -22,8 +22,6 @@ public actor GraphStore {
         case idCollisionExhausted
         /// The referenced edge does not exist.
         case edgeNotFound(sourceID: String, targetID: String)
-        /// The referenced act does not exist.
-        case actNotFound(id: String)
     }
 
     /// Opens a file-backed graph store at `path`.

@@ -94,43 +94,6 @@ struct GraphStoreCRUDTests {
         #expect(top[1].weight == 0.6)
     }
 
-    @Test("insertAct round-trip and default status")
-    func actRoundTrip() async throws {
-        let store = try GraphStore.inMemory()
-        let act = try await store.insertAct(seedIDs: ["s1", "s2"], behaviorIDs: ["b1"])
-        #expect(act.status == .pending)
-        #expect(act.seedIDs == ["s1", "s2"])
-        #expect(act.behaviorIDs == ["b1"])
-
-        let recent = try await store.recentActs(limit: 10)
-        #expect(recent.count == 1)
-        #expect(recent.first == act)
-    }
-
-    @Test("recentActs filters by status set")
-    func recentActsFilter() async throws {
-        let store = try GraphStore.inMemory()
-        let pending = try await store.insertAct(seedIDs: ["s"], behaviorIDs: ["b"])
-        let accepted = try await store.insertAct(seedIDs: ["s"], behaviorIDs: ["b"])
-        try await store.setActStatus(id: accepted.id, status: .accepted)
-
-        let onlyPending = try await store.recentActs(limit: 10)
-        #expect(onlyPending.count == 1)
-        #expect(onlyPending.first?.id == pending.id)
-
-        let all = try await store.recentActs(limit: 10, statuses: [.pending, .accepted])
-        #expect(all.count == 2)
-    }
-
-    @Test("setActStatus persists")
-    func statusRoundTrip() async throws {
-        let store = try GraphStore.inMemory()
-        let act = try await store.insertAct(seedIDs: ["s"], behaviorIDs: ["b"])
-        try await store.setActStatus(id: act.id, status: .accepted)
-        let reloaded = try await store.recentActs(limit: 10, statuses: [.accepted])
-        #expect(reloaded.first?.status == .accepted)
-    }
-
     @Test("insertNode retries on ID collision")
     func collisionRetry() async throws {
         final class Counter: @unchecked Sendable {

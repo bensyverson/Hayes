@@ -33,17 +33,16 @@ public enum MemoryPrompts {
 
     /// System prompt for ``AnalysisRunner``.
     ///
-    /// Combines three tasks in a single call per turn:
-    ///   - `moves`: reusable techniques + generalizations the agent used.
-    ///   - `user_feedback`: attribution pulled from the user's message.
-    ///   - `self_assessment`: attribution pulled from the agent's thinking.
-    ///
-    /// Both attribution lists reference the same `recent_acts` input and share
-    /// the same shape. They differ only in the source scale applied at
-    /// reinforcement time (``RetrievalConfig/userFeedbackScale`` vs.
-    /// ``RetrievalConfig/selfAssessmentScale``).
+    /// Single output: a list of ``Lesson``s, each pairing a seed (the
+    /// kind of work) with a behavior (a specific choice or technique)
+    /// and a signed sentiment. The middleware uses each lesson to
+    /// find-or-create seed and behavior nodes and reinforce the edge
+    /// between them. There is no intermediate act, no attribution
+    /// against a candidate act list, no separate moves/user_feedback/
+    /// self_assessment split.
     public static let analysis: String = """
-    You are analyzing a single turn of an AI design agent.
+    You are analyzing a single turn of an AI design agent to extract
+    lessons that should be learned from it.
 
     Input:
     - CONVERSATION: the full message slice for the current turn, as
@@ -52,41 +51,72 @@ public enum MemoryPrompts {
       Binary content (images, PDFs, audio, video) is replaced with
       short text placeholders like `[redacted image/png]`.
     - THINKING TRACE: the agent's concatenated thinking across all
-      LLM calls in the turn. May be empty if the agent produced no
-      reasoning this turn — in which case infer what it did from the
-      CONVERSATION alone (especially tool calls and their arguments).
-    - RECENT PENDING ACTS: a list of prior pending acts
-      (id + behavior phrases + timestamp).
+      LLM calls in the turn. May be empty — in which case infer what
+      the agent did from the CONVERSATION alone (especially tool
+      calls and their arguments).
 
     Return JSON ONLY with this exact shape:
     {
-      "moves": ["phrase", ...],
-      "user_feedback": [{"act_id": "...", "sentiment": 0.7}, ...],
-      "self_assessment": [{"act_id": "...", "sentiment": -0.3}, ...]
+      "lessons": [
+        {"seed": "...", "behavior": "...", "sentiment": 0.7, "source": "user"},
+        ...
+      ]
     }
 
-    moves (3-5 items): short phrases (2-8 words each) naming:
-      - Reusable techniques the agent used ("clamp() responsive typography").
-      - Generalizations the agent articulated ("warmer colors for wellness brands").
-    Both kinds go in the same array. If the agent took any visible
-    action this turn — wrote code, produced an artifact, made a choice —
-    you MUST return at least one move naming the technique or choice.
-    Only return an empty moves array when the agent truly did nothing
-    worth naming (e.g. a pure clarifying question with no other action);
-    in that case include a trailing `"notes"` field explaining why.
-    The parser ignores unknown fields, so extra keys are safe.
+    Each lesson has four fields:
+      - seed: a short phrase (2-8 words) describing the kind of work
+        or context — e.g. "electrolyte drink website", "typography
+        for wellness brands", "minimal spa landing page". This is
+        the *context*, not the user's literal words. If the user
+        said "I hate Arial" while the agent was designing a beverage
+        site, the seed is the beverage site, not the complaint.
+      - behavior: a short phrase (2-8 words) naming the specific
+        choice, technique, or element the lesson attaches to — e.g.
+        "Arial body copy", "Georgia serif typeface", "gradient
+        background". Behaviors are concrete.
+      - sentiment: a number in [-1.0, 1.0]. Magnitude scales with
+        strength: "hate" → -0.9, "not a fan" → -0.4, "pretty good"
+        → 0.5, "love" → 0.9.
+      - source: "user" if the signal came from the user's message,
+        "self_assessment" if it came from the agent's thinking trace.
 
-    user_feedback: if the user's message attributes success or failure to
-    any prior act in the recent_acts list, emit one entry per attributed
-    act with sentiment in [-1.0, 1.0]. Empty array if no such attribution.
+    What to look for:
+      - Any evaluative signal in the user's message — praise,
+        criticism, preference, dislike. Users rarely flag acts
+        explicitly; they react to elements, choices, or outcomes.
+        Emit one lesson per distinct reaction.
+      - Any evaluative signal in the thinking trace — moments where
+        the agent expresses satisfaction with, or identifies a
+        problem with, something it (or a prior turn) did.
 
-    self_assessment: if the agent's thinking trace expresses satisfaction
-    or identifies problems with any prior act in the recent_acts list,
-    emit one entry per attributed act with sentiment in [-1.0, 1.0].
-    Empty array if no such attribution.
+    Retroactive capture is the norm, not the exception. The agent
+    may have used a font, color, or layout without flagging it as a
+    deliberate move. When the user reacts to it, emit a lesson
+    naming the behavior the user is actually responding to — even if
+    no prior turn logged it.
 
-    Both lists reference the SAME recent_acts. They differ only in source:
-    user_feedback comes from the user's words; self_assessment comes from
-    the agent's own thinking.
+    Worked example. The agent designs an electrolyte drink site
+    using Arial for body copy, without flagging Arial explicitly.
+    The user then says: "Oh cool. I hate Arial."
+    Correct output:
+    {
+      "lessons": [
+        {"seed": "electrolyte drink website", "behavior": "bold glow headline treatment", "sentiment": 0.6, "source": "user"},
+        {"seed": "electrolyte drink website", "behavior": "Arial body copy", "sentiment": -0.8, "source": "user"}
+      ]
+    }
+    The positive lesson attaches to the overall design the user
+    approved of; the negative one is retroactive capture of the
+    Arial choice the user disliked.
+
+    Worked example for self_assessment. The thinking trace contains
+    "I think the green CTA button looks flat; the old gold version
+    had more presence." Correct lesson:
+    {"seed": "landing page CTA button", "behavior": "green CTA button color", "sentiment": -0.5, "source": "self_assessment"}
+
+    Return an empty lessons array ONLY when the turn carries no
+    evaluative content at all (e.g. a new neutral request, a pure
+    clarifying question). This case is rare — most turns contain at
+    least one implicit signal.
     """
 }

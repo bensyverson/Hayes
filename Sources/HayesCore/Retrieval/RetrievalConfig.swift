@@ -28,8 +28,6 @@ public struct RetrievalConfig: Friendly {
     public var userFeedbackScale: Double
     /// Trust scale applied to agent self-assessment.
     public var selfAssessmentScale: Double
-    /// Number of recent acts the analysis runner considers.
-    public var recentActsWindow: Int
     /// Number of trailing conversation messages passed to ``ContextExtractor``.
     public var contextWindowSize: Int
 
@@ -44,7 +42,6 @@ public struct RetrievalConfig: Friendly {
     ///     Default `0.10`.
     ///   - userFeedbackScale: User-feedback trust scale. Default `1.0`.
     ///   - selfAssessmentScale: Self-assessment trust scale. Default `0.3`.
-    ///   - recentActsWindow: Recent-acts window. Default `50`.
     ///   - contextWindowSize: Number of trailing conversation messages passed to
     ///     ``ContextExtractor``. Default `5`.
     public init(
@@ -56,7 +53,6 @@ public struct RetrievalConfig: Friendly {
         feedbackRate: Double = 0.10,
         userFeedbackScale: Double = 1.0,
         selfAssessmentScale: Double = 0.3,
-        recentActsWindow: Int = 50,
         contextWindowSize: Int = 5
     ) {
         self.seedThreshold = seedThreshold
@@ -67,7 +63,6 @@ public struct RetrievalConfig: Friendly {
         self.feedbackRate = feedbackRate
         self.userFeedbackScale = userFeedbackScale
         self.selfAssessmentScale = selfAssessmentScale
-        self.recentActsWindow = recentActsWindow
         self.contextWindowSize = contextWindowSize
     }
 

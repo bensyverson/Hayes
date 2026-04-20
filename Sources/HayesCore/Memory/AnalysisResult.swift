@@ -1,46 +1,30 @@
 /// The structured output of ``AnalysisRunner``.
 ///
-/// A single turn produces three artifacts:
-///   - ``moves`` — short phrases naming techniques or generalizations the
-///     agent articulated, to be reified as behavior nodes.
-///   - ``userFeedback`` — attribution derived from the user's message.
-///   - ``selfAssessment`` — attribution derived from the agent's thinking
-///     trace. Same shape as ``userFeedback``; they differ only in the
-///     reinforcement scale applied downstream.
+/// A single turn produces zero or more ``Lesson``s. Each lesson names a
+/// seed phrase, a behavior phrase, a sentiment, and the source that
+/// produced the attribution (user message or agent thinking trace).
+/// The middleware uses each lesson to find-or-create seed and behavior
+/// nodes and reinforce the edge between them.
+///
+/// Turns with no evaluative signal produce an empty `lessons` list —
+/// silence means no learning.
 public struct AnalysisResult: Friendly {
-    /// Reusable techniques + generalizations extracted from the turn.
-    public let moves: [String]
-    /// Attribution derived from the user's message.
-    public let userFeedback: [ActFeedback]
-    /// Attribution derived from the agent's thinking trace.
-    public let selfAssessment: [ActFeedback]
+    /// The lessons extracted from the turn.
+    public let lessons: [Lesson]
 
     /// Creates a new analysis result.
-    /// - Parameters:
-    ///   - moves: Techniques + generalizations.
-    ///   - userFeedback: Attributions from the user message.
-    ///   - selfAssessment: Attributions from the thinking trace.
-    public init(
-        moves: [String],
-        userFeedback: [ActFeedback],
-        selfAssessment: [ActFeedback]
-    ) {
-        self.moves = moves
-        self.userFeedback = userFeedback
-        self.selfAssessment = selfAssessment
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case moves
-        case userFeedback = "user_feedback"
-        case selfAssessment = "self_assessment"
+    /// - Parameter lessons: The lessons extracted from the turn.
+    public init(lessons: [Lesson]) {
+        self.lessons = lessons
     }
 
     /// Tolerant decoder: `null` or missing list → empty array.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        moves = try container.decodeIfPresent([String].self, forKey: .moves) ?? []
-        userFeedback = try container.decodeIfPresent([ActFeedback].self, forKey: .userFeedback) ?? []
-        selfAssessment = try container.decodeIfPresent([ActFeedback].self, forKey: .selfAssessment) ?? []
+        lessons = try container.decodeIfPresent([Lesson].self, forKey: .lessons) ?? []
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case lessons
     }
 }

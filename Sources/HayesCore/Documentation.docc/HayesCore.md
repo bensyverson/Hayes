@@ -7,7 +7,7 @@ Foundations for Hayes's automatic memory system: models, persistence, embeddings
 `HayesCore` is the LLM-free core of Hayes. It provides the building blocks that the memory
 middleware and CLI layer above it depend on:
 
-- **Models** — ``Node``, ``Edge``, ``Act``, ``ActStatus`` — the memory graph's atoms.
+- **Models** — ``Node``, ``Edge``, ``Lesson`` — the memory graph's atoms.
 - **Persistence** — ``GraphStore``, a SQLite-backed actor that owns the graph.
 - **Embeddings** — ``EmbeddingProvider`` and the default ``NLEmbeddingProvider``
   that wraps Apple's English sentence embedding.
@@ -22,8 +22,7 @@ middleware and CLI layer above it depend on:
 
 - ``Node``
 - ``Edge``
-- ``Act``
-- ``ActStatus``
+- ``Lesson``
 - ``NodeID``
 - ``Friendly``
 
@@ -50,7 +49,6 @@ middleware and CLI layer above it depend on:
 - ``ContextExtractor``
 - ``AnalysisRunner``
 - ``AnalysisResult``
-- ``ActFeedback``
 - ``MiddlewareEvent``
 - ``LLMClient``
 - ``OperatorLLMClient``

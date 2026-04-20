@@ -5,36 +5,22 @@ import TextUI
 extension ChatState {
     /// Handles an event drained from `MemoryMiddleware.events`.
     ///
-    /// Runs on the main actor. Splits events into three destinations:
+    /// Runs on the main actor. Splits events into two destinations:
     /// - ``memoryInjected`` → sidebar (activated seeds / behaviors).
-    /// - ``movesExtracted`` / ``userFeedback`` / ``selfAssessment`` → the
-    ///   chat transcript, as centered colored banners.
-    /// - ``actCreated`` → trigger a top-edges refetch so the sidebar
-    ///   reflects reinforcement from this turn.
+    /// - ``edgeReinforced`` → chat transcript as a centered colored
+    ///   banner, plus a top-edges refresh so the sidebar reflects
+    ///   reinforcement from this turn.
     func apply(_ event: MiddlewareEvent) {
         switch event {
         case let .memoryInjected(seeds, behaviors):
             activatedSeeds = seeds
             activatedBehaviors = behaviors
 
-        case let .movesExtracted(texts):
-            guard !texts.isEmpty else { return }
-            append(banner: "Moves: \(texts.joined(separator: ", "))", color: .cyan)
-
-        case let .analysisEmpty(reason):
-            append(banner: "Analysis empty: \(reason)", color: .yellow)
-
-        case let .userFeedback(list):
-            guard !list.isEmpty else { return }
-            let body = list.map(Self.format).joined(separator: "; ")
-            append(banner: "User assessment: \(body)", color: SentimentColor.color(for: list))
-
-        case let .selfAssessment(list):
-            guard !list.isEmpty else { return }
-            let body = list.map(Self.format).joined(separator: "; ")
-            append(banner: "Self-assessment: \(body)", color: SentimentColor.color(for: list))
-
-        case .actCreated:
+        case let .edgeReinforced(payload):
+            append(
+                banner: Self.format(payload),
+                color: SentimentColor.color(forSentiment: payload.sentiment)
+            )
             refreshTopEdges()
         }
     }
@@ -48,7 +34,17 @@ extension ChatState {
         ))
     }
 
-    private static func format(_ entry: MiddlewareEvent.AttributedFeedback) -> String {
-        String(format: "%@ (%+.1f)", entry.label, entry.sentiment)
+    private static func format(_ edge: MiddlewareEvent.ReinforcedEdge) -> String {
+        let source = switch edge.source {
+        case .user: "user"
+        case .selfAssessment: "self"
+        }
+        return String(
+            format: "learned (%@): %@ → %@ (%+.1f)",
+            source,
+            edge.seed,
+            edge.behavior,
+            edge.sentiment
+        )
     }
 }

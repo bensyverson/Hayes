@@ -114,96 +114,6 @@ public extension GraphStore {
         }
     }
 
-    /// Inserts a new ``Act``. Status defaults to ``ActStatus/pending``.
-    /// - Parameters:
-    ///   - seedIDs: The seed node identifiers.
-    ///   - behaviorIDs: The behavior node identifiers.
-    /// - Returns: The inserted ``Act``.
-    func insertAct(seedIDs: [String], behaviorIDs: [String]) throws -> Act {
-        let storedInterval = Date().timeIntervalSince1970
-        let createdAt = Date(timeIntervalSince1970: storedInterval)
-        let seedJSON = try encodeIDList(seedIDs)
-        let behaviorJSON = try encodeIDList(behaviorIDs)
-        return try withIDRetry { id in
-            try database.write { db in
-                try db.execute(
-                    sql: """
-                    INSERT INTO acts (id, created_at, seed_ids, behavior_ids, status)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    arguments: [
-                        id,
-                        storedInterval,
-                        seedJSON,
-                        behaviorJSON,
-                        ActStatus.pending.rawValue,
-                    ]
-                )
-            }
-            return Act(
-                id: id,
-                createdAt: createdAt,
-                seedIDs: seedIDs,
-                behaviorIDs: behaviorIDs,
-                status: .pending
-            )
-        }
-    }
-
-    /// Returns the most recent acts matching the given status set.
-    /// - Parameters:
-    ///   - limit: The maximum number of acts to return.
-    ///   - statuses: The statuses to include (defaults to ``ActStatus/pending``).
-    func recentActs(
-        limit: Int,
-        statuses: Set<ActStatus> = [.pending]
-    ) throws -> [Act] {
-        try database.read { db in
-            let placeholders = Array(repeating: "?", count: statuses.count).joined(separator: ",")
-            let sql = """
-            SELECT id, created_at, seed_ids, behavior_ids, status FROM acts
-            WHERE status IN (\(placeholders))
-            ORDER BY created_at DESC
-            LIMIT ?
-            """
-            var arguments: [any DatabaseValueConvertible] = statuses.map(\.rawValue)
-            arguments.append(limit)
-            return try Row.fetchAll(db, sql: sql, arguments: StatementArguments(arguments))
-                .compactMap { GraphStore.makeAct(row: $0) }
-        }
-    }
-
-    /// Returns a single act by identifier.
-    /// - Parameter id: The act identifier.
-    func findAct(id: String) throws -> Act? {
-        try database.read { db in
-            guard let row = try Row.fetchOne(
-                db,
-                sql: """
-                SELECT id, created_at, seed_ids, behavior_ids, status FROM acts WHERE id = ?
-                """,
-                arguments: [id]
-            ) else { return nil }
-            return GraphStore.makeAct(row: row)
-        }
-    }
-
-    /// Updates an act's lifecycle status.
-    /// - Parameters:
-    ///   - id: The act identifier.
-    ///   - status: The new status.
-    func setActStatus(id: String, status: ActStatus) throws {
-        try database.write { db in
-            try db.execute(
-                sql: "UPDATE acts SET status = ? WHERE id = ?",
-                arguments: [status.rawValue, id]
-            )
-            if db.changesCount == 0 {
-                throw GraphStore.Error.actNotFound(id: id)
-            }
-        }
-    }
-
     /// Returns a single edge by source/target, if present.
     /// - Parameters:
     ///   - sourceID: The source node identifier.
@@ -257,15 +167,6 @@ extension GraphStore {
 }
 
 extension GraphStore {
-    static func encodeIDList(_ ids: [String]) throws -> String {
-        let data = try JSONEncoder().encode(ids)
-        return String(decoding: data, as: UTF8.self)
-    }
-
-    func encodeIDList(_ ids: [String]) throws -> String {
-        try GraphStore.encodeIDList(ids)
-    }
-
     static func makeNode(row: Row) -> Node {
         let data: Data = row["embedding"] ?? Data()
         return Node(
@@ -281,24 +182,6 @@ extension GraphStore {
             targetID: row["target_id"],
             weight: row["weight"],
             updatedAt: Date(timeIntervalSince1970: row["updated_at"])
-        )
-    }
-
-    static func makeAct(row: Row) -> Act? {
-        let seedJSON: String = row["seed_ids"]
-        let behaviorJSON: String = row["behavior_ids"]
-        let decoder = JSONDecoder()
-        guard
-            let seedIDs = try? decoder.decode([String].self, from: Data(seedJSON.utf8)),
-            let behaviorIDs = try? decoder.decode([String].self, from: Data(behaviorJSON.utf8)),
-            let status = ActStatus(rawValue: row["status"])
-        else { return nil }
-        return Act(
-            id: row["id"],
-            createdAt: Date(timeIntervalSince1970: row["created_at"]),
-            seedIDs: seedIDs,
-            behaviorIDs: behaviorIDs,
-            status: status
         )
     }
 }

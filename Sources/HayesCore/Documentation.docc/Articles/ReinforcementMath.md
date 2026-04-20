@@ -4,11 +4,12 @@ How edge weights move in response to feedback.
 
 ## Overview
 
-Reinforcement applies a user- or self-attributed sentiment to a pending ``Act``,
-updating the weight of every edge that connects one of the act's seeds to one of
-its behaviors. Each act is eligible for exactly one round of attribution; once its
-status leaves ``ActStatus/pending``, further calls to
-``GraphStore/applyFeedback(actID:sentiment:sourceScale:config:)`` are no-ops.
+Reinforcement applies a user- or self-attributed sentiment to a single
+directed edge between a seed node and a behavior node. Each ``Lesson``
+the analyzer emits produces exactly one
+``GraphStore/reinforceEdge(seedID:behaviorID:sentiment:sourceScale:config:)``
+call. Edges may be reinforced repeatedly over time; each call applies the
+update and leaves the edge open to further feedback.
 
 ## The math
 
@@ -32,8 +33,8 @@ sentiment's target, so updates are largest near zero and shrink as the weight
 approaches saturation at `±1`. The formula is symmetric: positive and negative
 feedback use the same step, just aimed at opposite targets.
 
-`sentiment == 0` is explicit "no evidence" and is a full no-op — no edge insert,
-no weight change, no status flip.
+`sentiment == 0` is explicit "no evidence" and is a full no-op — no edge
+insert, no weight change.
 
 ## Examples
 
@@ -51,14 +52,6 @@ With `feedbackRate = 0.10`:
 
 Fresh `(seed, behavior)` pairs have no edge at all — the first non-zero
 feedback creates the edge at that first `w'` value.
-
-## Status transitions
-
-After a successful update, the act's status flips:
-
-- `sentiment > 0` → ``ActStatus/accepted``
-- `sentiment < 0` → ``ActStatus/revised``
-- `sentiment == 0` → left ``ActStatus/pending`` (no evidence, no commitment)
 
 ## Retrieval interaction
 

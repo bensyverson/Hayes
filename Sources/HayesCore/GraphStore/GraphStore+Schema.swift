@@ -28,18 +28,9 @@ extension GraphStore {
             try db.execute(sql: """
             CREATE INDEX IF NOT EXISTS edges_weight_idx ON edges(weight DESC);
             """)
-            try db.execute(sql: """
-            CREATE TABLE IF NOT EXISTS acts (
-                id TEXT PRIMARY KEY NOT NULL,
-                created_at REAL NOT NULL,
-                seed_ids TEXT NOT NULL,
-                behavior_ids TEXT NOT NULL,
-                status TEXT NOT NULL
-            );
-            """)
-            try db.execute(sql: """
-            CREATE INDEX IF NOT EXISTS acts_created_idx ON acts(created_at DESC);
-            """)
+        }
+        migrator.registerMigration("drop_acts") { db in
+            try db.execute(sql: "DROP TABLE IF EXISTS acts;")
         }
         try migrator.migrate(queue)
     }

@@ -9,10 +9,9 @@ private let memoryToolName = "memory"
 ///   conversation, embeds them, deduplicates against the corpus, retrieves
 ///   related seeds + behaviors, and injects them via a synthetic
 ///   `memory` tool exchange.
-/// - `afterRun` summarises pending acts, runs the analysis call, applies
-///   `user_feedback` / `self_assessment` attributions to prior acts, inserts
-///   behavior nodes for any `moves`, and creates a new pending act for the
-///   current turn.
+/// - `afterRun` runs the analysis call to extract ``Lesson``s, then for
+///   each lesson finds-or-creates seed and behavior nodes and reinforces
+///   the edge between them. Turns with no lessons write nothing.
 public final class MemoryMiddleware: Middleware, @unchecked Sendable {
     private let store: GraphStore
     private let embeddings: any EmbeddingProvider
@@ -173,135 +172,61 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
     }
 
     public func afterRun(_ context: RunContext) async throws {
-        // If `beforeRequest` was bypassed (first run of a session with
-        // `bypassFirstRun == true`), `runContextNodeIDs` is empty for
-        // this trigger. Run extraction now so the act still gets seeds.
-        if bypassFirstRun {
-            try await extractContextIfMissing(for: context.messages)
-        }
-
-        let pending = try await store.recentActs(
-            limit: config.recentActsWindow,
-            statuses: [.pending]
-        )
-        let behaviorIDSet: [String] = pending.flatMap(\.behaviorIDs).unique
-        let behaviorNodes = try await store.findNodes(ids: behaviorIDSet)
-        let textByID: [String: String] = Dictionary(
-            uniqueKeysWithValues: behaviorNodes.map { ($0.id, $0.text) }
-        )
-
-        let summaries: [AnalysisRunner.RecentActSummary] = pending.map { act in
-            let texts = act.behaviorIDs.compactMap { textByID[$0] }
-            return AnalysisRunner.RecentActSummary(
-                id: act.id,
-                behaviors: texts,
-                createdAt: act.createdAt
-            )
-        }
-
         let turnMessages = Self.lastTurnMessages(context.messages)
         let result = try await analyzer.analyze(
             messages: turnMessages,
-            thinking: context.thinking,
-            recentActs: summaries
+            thinking: context.thinking
         )
-
-        // Labels are resolved against the pending summaries above so
-        // UI rendering doesn't have to fall back to act IDs.
-        let labels: [String: String] = Dictionary(
-            uniqueKeysWithValues: summaries.map { summary in
-                (summary.id, Self.formatActLabel(behaviors: summary.behaviors))
-            }
-        )
-        func attributed(_ entries: [ActFeedback]) -> [MiddlewareEvent.AttributedFeedback] {
-            entries.map { entry in
-                MiddlewareEvent.AttributedFeedback(
-                    actID: entry.actID,
-                    label: labels[entry.actID] ?? entry.actID,
-                    sentiment: entry.sentiment
-                )
-            }
-        }
-
-        // Sequential by design: each call mutates the same `GraphStore`
-        // actor, so parallelism would collapse to serialization anyway and
-        // ordering would become nondeterministic. User feedback runs first
-        // so it wins the once-feedback-per-act race against self-assessment.
-        try await applyFeedback(result.userFeedback, scale: config.userFeedbackScale)
-        emit(.userFeedback(attributed(result.userFeedback)))
-
-        try await applyFeedback(result.selfAssessment, scale: config.selfAssessmentScale)
-        emit(.selfAssessment(attributed(result.selfAssessment)))
 
         var snapshot = await store.embeddingSnapshot()
-        var behaviorNodeList: [Node] = []
-        for move in result.moves {
-            let embedding = try embeddings.embed(move)
-            let node = try await ensureNode(text: move, embedding: embedding, in: &snapshot)
-            behaviorNodeList.append(node)
-        }
-        emit(.movesExtracted(texts: result.moves))
-        if result.moves.isEmpty {
-            // The act is still created (seeds + empty behaviors), so the
-            // diagnostic is visible in the store, but surface it as a
-            // discrete event so the CLI doesn't have to infer from a
-            // blank `movesExtracted` that something went wrong.
-            emit(.analysisEmpty(reason: "analyzer returned empty moves"))
+        for lesson in result.lessons {
+            let seedEmbedding = try embeddings.embed(lesson.seed)
+            let seedNode = try await ensureNode(
+                text: lesson.seed,
+                embedding: seedEmbedding,
+                in: &snapshot
+            )
+            let behaviorEmbedding = try embeddings.embed(lesson.behavior)
+            let behaviorNode = try await ensureNode(
+                text: lesson.behavior,
+                embedding: behaviorEmbedding,
+                in: &snapshot
+            )
+
+            let scale: Double = switch lesson.source {
+            case .user: config.userFeedbackScale
+            case .selfAssessment: config.selfAssessmentScale
+            }
+            try await store.reinforceEdge(
+                seedID: seedNode.id,
+                behaviorID: behaviorNode.id,
+                sentiment: lesson.sentiment,
+                sourceScale: scale,
+                config: config
+            )
+
+            emit(.edgeReinforced(MiddlewareEvent.ReinforcedEdge(
+                seed: lesson.seed,
+                behavior: lesson.behavior,
+                sentiment: lesson.sentiment,
+                source: lesson.source
+            )))
         }
 
-        let triggerKey = Self.runKey(from: context.messages)
-        let seedIDs: [String] = lock.withLock {
-            guard let key = triggerKey else { return [] }
-            return runContextNodeIDs.removeValue(forKey: key) ?? []
+        // Clear the per-turn idempotency record so a later turn with the
+        // same hash can still trigger injection. (Rare, but
+        // deterministic.)
+        if let triggerKey = Self.runKey(from: context.messages) {
+            lock.withLock { _ = runContextNodeIDs.removeValue(forKey: triggerKey) }
         }
-
-        let behaviorIDs = behaviorNodeList.map(\.id)
-        let act = try await store.insertAct(seedIDs: seedIDs, behaviorIDs: behaviorIDs)
-        emit(.actCreated(id: act.id, seedIDs: seedIDs, behaviorIDs: behaviorIDs))
 
         lock.withLock { hasCompletedFirstRun = true }
-    }
-
-    /// Extracts context phrases and tracks seed IDs if none have been
-    /// recorded for the current trigger yet. Used by ``afterRun`` when
-    /// ``bypassFirstRun`` is enabled and the matching ``beforeRequest``
-    /// was a no-op.
-    ///
-    /// Uses ``lastTurnMessages(_:)`` rather than ``trimWindow(_:size:)``
-    /// because `afterRun` fires at the end of a run that may include
-    /// several tool-use rounds — by which point the triggering user
-    /// message has dropped out of a fixed 5-message tail. The last-turn
-    /// slice always includes the user message so ``runKey(from:)``
-    /// returns a non-nil trigger.
-    private func extractContextIfMissing(for messages: [Operator.Message]) async throws {
-        let turn = Self.lastTurnMessages(messages)
-        guard !turn.isEmpty, let triggerKey = Self.runKey(from: turn) else { return }
-        let alreadyTracked: Bool = lock.withLock {
-            runContextNodeIDs[triggerKey] != nil
-        }
-        if alreadyTracked { return }
-        _ = try await extractAndTrackContext(window: turn, triggerKey: triggerKey)
     }
 
     // MARK: - Helpers
 
     private func emit(_ event: MiddlewareEvent) {
         continuation.yield(event)
-    }
-
-    private func applyFeedback(_ feedback: [ActFeedback], scale: Double) async throws {
-        for entry in feedback {
-            do {
-                try await store.applyFeedback(
-                    actID: entry.actID,
-                    sentiment: entry.sentiment,
-                    sourceScale: scale,
-                    config: config
-                )
-            } catch GraphStore.Error.actNotFound {
-                continue
-            }
-        }
     }
 
     private func ensureNode(
@@ -344,17 +269,6 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
 
     static func lastUserText(in messages: [Operator.Message]) -> String? {
         messages.reversed().first { $0.role == .user }?.textContent
-    }
-
-    /// Builds a compact, human-readable label for an act from its
-    /// behavior phrases. Used to enrich feedback events so the UI can
-    /// show the act's content rather than an opaque ID.
-    static func formatActLabel(behaviors: [String]) -> String {
-        let trimmed = behaviors
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard !trimmed.isEmpty else { return "(empty act)" }
-        return trimmed.joined(separator: ", ")
     }
 
     /// Returns the tail of `messages` starting at the most recent

@@ -8,7 +8,6 @@ struct GraphStoreReinforcementTests {
         let store: GraphStore
         let seedID: String
         let behaviorID: String
-        let actID: String
     }
 
     private func makeFixture(initialWeight: Double = 0.5) async throws -> Fixture {
@@ -16,8 +15,7 @@ struct GraphStoreReinforcementTests {
         let seed = try await store.insertNode(text: "seed", embedding: [0.0])
         let behavior = try await store.insertNode(text: "behavior", embedding: [0.0])
         _ = try await store.insertEdge(sourceID: seed.id, targetID: behavior.id, weight: initialWeight)
-        let act = try await store.insertAct(seedIDs: [seed.id], behaviorIDs: [behavior.id])
-        return Fixture(store: store, seedID: seed.id, behaviorID: behavior.id, actID: act.id)
+        return Fixture(store: store, seedID: seed.id, behaviorID: behavior.id)
     }
 
     @Test("positive feedback pulls weight toward +1 by rate · (1 − w)")
@@ -25,7 +23,12 @@ struct GraphStoreReinforcementTests {
         // w=0.5, rate=0.10, sentiment=1.0, scale=1.0
         // w' = 0.5 + 0.10 · 1.0 · 1.0 · (1 − 0.5) = 0.55
         let f = try await makeFixture()
-        try await f.store.applyFeedback(actID: f.actID, sentiment: 1.0, sourceScale: 1.0)
+        try await f.store.reinforceEdge(
+            seedID: f.seedID,
+            behaviorID: f.behaviorID,
+            sentiment: 1.0,
+            sourceScale: 1.0
+        )
         let edge = try await f.store.findEdge(sourceID: f.seedID, targetID: f.behaviorID)
         #expect(abs((edge?.weight ?? 0) - 0.55) < 1e-9)
     }
@@ -33,7 +36,12 @@ struct GraphStoreReinforcementTests {
     @Test("positive feedback asymptotes toward 1.0 without overshoot")
     func positiveAsymptote() async throws {
         let f = try await makeFixture(initialWeight: 0.98)
-        try await f.store.applyFeedback(actID: f.actID, sentiment: 1.0, sourceScale: 1.0)
+        try await f.store.reinforceEdge(
+            seedID: f.seedID,
+            behaviorID: f.behaviorID,
+            sentiment: 1.0,
+            sourceScale: 1.0
+        )
         let edge = try await f.store.findEdge(sourceID: f.seedID, targetID: f.behaviorID)
         // w' = 0.98 + 0.10 · (1 − 0.98) = 0.982
         let weight = edge?.weight ?? 0
@@ -46,7 +54,12 @@ struct GraphStoreReinforcementTests {
         // w=0.5, sentiment=-1.0 → target=-1, α=0.10
         // w' = 0.5 + 0.10 · (−1 − 0.5) = 0.35
         let f = try await makeFixture()
-        try await f.store.applyFeedback(actID: f.actID, sentiment: -1.0, sourceScale: 1.0)
+        try await f.store.reinforceEdge(
+            seedID: f.seedID,
+            behaviorID: f.behaviorID,
+            sentiment: -1.0,
+            sourceScale: 1.0
+        )
         let edge = try await f.store.findEdge(sourceID: f.seedID, targetID: f.behaviorID)
         #expect(abs((edge?.weight ?? 0) - 0.35) < 1e-9)
     }
@@ -55,8 +68,12 @@ struct GraphStoreReinforcementTests {
     func negativeAsymptote() async throws {
         let f = try await makeFixture(initialWeight: 0.01)
         for _ in 0 ..< 200 {
-            let freshAct = try await f.store.insertAct(seedIDs: [f.seedID], behaviorIDs: [f.behaviorID])
-            try await f.store.applyFeedback(actID: freshAct.id, sentiment: -1.0, sourceScale: 1.0)
+            try await f.store.reinforceEdge(
+                seedID: f.seedID,
+                behaviorID: f.behaviorID,
+                sentiment: -1.0,
+                sourceScale: 1.0
+            )
         }
         let edge = try await f.store.findEdge(sourceID: f.seedID, targetID: f.behaviorID)
         let weight = edge?.weight ?? 0
@@ -67,34 +84,26 @@ struct GraphStoreReinforcementTests {
     @Test("sourceScale=0.3 produces 30% of sourceScale=1.0 delta")
     func sourceScaleContrast() async throws {
         let full = try await makeFixture()
-        try await full.store.applyFeedback(actID: full.actID, sentiment: 1.0, sourceScale: 1.0)
+        try await full.store.reinforceEdge(
+            seedID: full.seedID,
+            behaviorID: full.behaviorID,
+            sentiment: 1.0,
+            sourceScale: 1.0
+        )
         let fullEdge = try await full.store.findEdge(sourceID: full.seedID, targetID: full.behaviorID)
         let fullDelta = (fullEdge?.weight ?? 0) - 0.5
 
         let partial = try await makeFixture()
-        try await partial.store.applyFeedback(actID: partial.actID, sentiment: 1.0, sourceScale: 0.3)
+        try await partial.store.reinforceEdge(
+            seedID: partial.seedID,
+            behaviorID: partial.behaviorID,
+            sentiment: 1.0,
+            sourceScale: 0.3
+        )
         let partialEdge = try await partial.store.findEdge(sourceID: partial.seedID, targetID: partial.behaviorID)
         let partialDelta = (partialEdge?.weight ?? 0) - 0.5
 
         #expect(abs(partialDelta - fullDelta * 0.3) < 1e-9)
-    }
-
-    @Test("positive sentiment flips to accepted; negative flips to revised; zero is no-op")
-    func statusTransitions() async throws {
-        let f = try await makeFixture()
-        try await f.store.applyFeedback(actID: f.actID, sentiment: 0.5, sourceScale: 1.0)
-        let reloadA = try await f.store.findAct(id: f.actID)
-        #expect(reloadA?.status == .accepted)
-
-        let actB = try await f.store.insertAct(seedIDs: [f.seedID], behaviorIDs: [f.behaviorID])
-        try await f.store.applyFeedback(actID: actB.id, sentiment: -0.3, sourceScale: 1.0)
-        let reloadB = try await f.store.findAct(id: actB.id)
-        #expect(reloadB?.status == .revised)
-
-        let actC = try await f.store.insertAct(seedIDs: [f.seedID], behaviorIDs: [f.behaviorID])
-        try await f.store.applyFeedback(actID: actC.id, sentiment: 0.0, sourceScale: 1.0)
-        let reloadC = try await f.store.findAct(id: actC.id)
-        #expect(reloadC?.status == .pending, "zero sentiment is no evidence — status stays pending")
     }
 
     @Test("zero sentiment does not create an edge")
@@ -102,9 +111,12 @@ struct GraphStoreReinforcementTests {
         let store = try GraphStore.inMemory()
         let seed = try await store.insertNode(text: "seed", embedding: [0.0])
         let behavior = try await store.insertNode(text: "behavior", embedding: [0.0])
-        // Note: no pre-existing edge.
-        let act = try await store.insertAct(seedIDs: [seed.id], behaviorIDs: [behavior.id])
-        try await store.applyFeedback(actID: act.id, sentiment: 0.0, sourceScale: 1.0)
+        try await store.reinforceEdge(
+            seedID: seed.id,
+            behaviorID: behavior.id,
+            sentiment: 0.0,
+            sourceScale: 1.0
+        )
         let edge = try await store.findEdge(sourceID: seed.id, targetID: behavior.id)
         #expect(edge == nil)
     }
@@ -114,8 +126,12 @@ struct GraphStoreReinforcementTests {
         let store = try GraphStore.inMemory()
         let seed = try await store.insertNode(text: "seed", embedding: [0.0])
         let behavior = try await store.insertNode(text: "behavior", embedding: [0.0])
-        let act = try await store.insertAct(seedIDs: [seed.id], behaviorIDs: [behavior.id])
-        try await store.applyFeedback(actID: act.id, sentiment: 1.0, sourceScale: 1.0)
+        try await store.reinforceEdge(
+            seedID: seed.id,
+            behaviorID: behavior.id,
+            sentiment: 1.0,
+            sourceScale: 1.0
+        )
         let edge = try await store.findEdge(sourceID: seed.id, targetID: behavior.id)
         // w' = 0 + 0.10 · (1 − 0) = 0.10
         #expect(abs((edge?.weight ?? 0) - 0.10) < 1e-9)
@@ -126,22 +142,41 @@ struct GraphStoreReinforcementTests {
         let store = try GraphStore.inMemory()
         let seed = try await store.insertNode(text: "seed", embedding: [0.0])
         let behavior = try await store.insertNode(text: "behavior", embedding: [0.0])
-        let act = try await store.insertAct(seedIDs: [seed.id], behaviorIDs: [behavior.id])
-        try await store.applyFeedback(actID: act.id, sentiment: -1.0, sourceScale: 1.0)
+        try await store.reinforceEdge(
+            seedID: seed.id,
+            behaviorID: behavior.id,
+            sentiment: -1.0,
+            sourceScale: 1.0
+        )
         let edge = try await store.findEdge(sourceID: seed.id, targetID: behavior.id)
         // w' = 0 + 0.10 · (−1 − 0) = −0.10
         #expect(abs((edge?.weight ?? 0) - -0.10) < 1e-9)
     }
 
-    @Test("non-pending acts are ignored by applyFeedback (once-feedback-wins)")
-    func onceFeedbackWins() async throws {
+    /// In the feedback-driven model, edges can be reinforced repeatedly
+    /// across turns. Each reinforcement applies the update; there is no
+    /// "once per act" constraint — saying "I hate Arial" twice should
+    /// compound the negative signal.
+    @Test("repeated reinforcement on the same edge accumulates")
+    func repeatedReinforcementAccumulates() async throws {
         let f = try await makeFixture()
-        try await f.store.applyFeedback(actID: f.actID, sentiment: 1.0, sourceScale: 1.0)
+        try await f.store.reinforceEdge(
+            seedID: f.seedID,
+            behaviorID: f.behaviorID,
+            sentiment: 1.0,
+            sourceScale: 1.0
+        )
         let afterFirst = try await f.store.findEdge(sourceID: f.seedID, targetID: f.behaviorID)
         let firstWeight = afterFirst?.weight ?? 0
 
-        try await f.store.applyFeedback(actID: f.actID, sentiment: 1.0, sourceScale: 1.0)
+        try await f.store.reinforceEdge(
+            seedID: f.seedID,
+            behaviorID: f.behaviorID,
+            sentiment: 1.0,
+            sourceScale: 1.0
+        )
         let afterSecond = try await f.store.findEdge(sourceID: f.seedID, targetID: f.behaviorID)
-        #expect(afterSecond?.weight == firstWeight)
+        let secondWeight = afterSecond?.weight ?? 0
+        #expect(secondWeight > firstWeight, "second reinforcement should push the weight further toward 1.0")
     }
 }

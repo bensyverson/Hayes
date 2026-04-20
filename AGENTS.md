@@ -50,6 +50,7 @@ At moments when significant work has been completed and accepted by the user, of
 - If, during development, you must update an existing test to get it to pass, explain exactly WHY to the user and get their consent.
 - Before fixing any bug, try to create a regression test to catch it in the future.
 - DO NOT begin by doing an extensive exploration of the entire codebase. That is wasteful, as this is a large codebase. Instead, read the README and use an Explore agent to read the documentation if you want to get the lay of the land. Of course, once you have a specific need, you can explore as much of the code as you require.
+- To create and manage task lists, don't use your built-in to-do tools. You must ALWAYS use the `job` command.
 
 ## Development Stage
 

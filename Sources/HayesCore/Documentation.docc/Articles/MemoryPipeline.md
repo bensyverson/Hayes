@@ -1,7 +1,7 @@
 # The memory pipeline
 
 End-to-end flow of Hayes's memory pipeline: pre-request context inference,
-post-run analysis, and the reinforcement signals that accumulate over time.
+post-run analysis, and the edge reinforcement that accumulates over time.
 
 ## Overview
 
@@ -19,34 +19,44 @@ as an `Operator.Middleware` conformer, ``MemoryMiddleware``:
    `memory` tool exchange, cache-friendly and proximate to the upcoming
    response.
 4. **Main generation** — the agent generates its response as usual.
-5. **Post-run analysis** — ``AnalysisRunner`` takes the user message, the
-   concatenated thinking trace, and a summary of recent pending acts, and
-   produces three artifacts:
-   - **`moves`** — techniques + generalizations to reify as behavior nodes.
-   - **`user_feedback`** — attributions drawn from the user's message.
-   - **`self_assessment`** — attributions drawn from the thinking trace.
-6. **Attribution** — each attribution calls
-   ``GraphStore/applyFeedback(actID:sentiment:sourceScale:config:)`` with the
-   appropriate trust scale: ``RetrievalConfig/userFeedbackScale`` (1.0) for
-   user feedback, ``RetrievalConfig/selfAssessmentScale`` (0.3) for
-   self-assessment.
-7. **Act creation** — a new pending ``Act`` is inserted binding the turn's
-   context nodes to its behavior nodes. It starts at ``ActStatus/pending``
-   and is only attributed on future turns — the current turn's act cannot be
-   self-assessed this turn, because it isn't in the `recentActs` window yet.
+5. **Post-run analysis** — ``AnalysisRunner`` reads the conversation slice
+   for the turn plus the thinking trace and produces a list of ``Lesson``s.
+   Each lesson names a seed (the kind of work), a behavior (the specific
+   choice the user or agent reacted to), a sentiment in `[-1, 1]`, and a
+   ``Lesson/Source`` (`user` or `selfAssessment`).
+6. **Edge reinforcement** — for each lesson the middleware:
+   - embeds the seed and behavior, finds-or-creates each node via cosine
+     dedupe against the existing graph (``RetrievalConfig/dedupThreshold``);
+   - calls
+     ``GraphStore/reinforceEdge(seedID:behaviorID:sentiment:sourceScale:config:)``
+     with the matching trust scale —
+     ``RetrievalConfig/userFeedbackScale`` (1.0) for user-sourced lessons,
+     ``RetrievalConfig/selfAssessmentScale`` (0.3) for self-assessment.
+7. **Silence writes nothing.** Turns whose analyzer returns an empty
+   ``AnalysisResult/lessons`` list touch no edges. The graph records only
+   signals the user (or the agent's self-critique) actually produced.
 
-## Shape symmetry: user feedback vs. self assessment
+## Retroactive capture
 
-Both ``AnalysisResult/userFeedback`` and ``AnalysisResult/selfAssessment``
-are arrays of ``ActFeedback``. They reference the same `recent_acts` input;
-they differ only in the `sourceScale` applied at reinforcement time. This
-keeps the prompt compact — one call per turn produces all three artifacts.
+Users rarely flag acts explicitly — they react to elements, choices, or
+outcomes. *"I hate Arial"* is feedback on a font the agent may never have
+articulated as a deliberate move. The prompt tells the analyzer that this
+retroactive naming is the norm: emit a lesson naming the behavior the user
+is actually reacting to, even when no prior turn recorded it. The seed and
+behavior nodes are created on first use.
 
 ## Observability
 
 ``MemoryMiddleware/events`` is an `AsyncStream<MiddlewareEvent>` fired at
-each pipeline stage. Phase 3's CLI subscribes to render a sidebar; tests
-assert expected events per scenario.
+each pipeline stage. Two event kinds:
+
+- ``MiddlewareEvent/memoryInjected(seeds:behaviors:)`` — from
+  `beforeRequest`, after retrieval.
+- ``MiddlewareEvent/edgeReinforced(_:)`` — once per ``Lesson`` emitted in
+  `afterRun`, carrying the seed, behavior, sentiment, and source.
+
+The CLI subscribes to render a sidebar and banners; tests assert expected
+events per scenario.
 
 ## Configuration
 
@@ -58,5 +68,5 @@ assert expected events per scenario.
   treated as an existing node.
 - ``RetrievalConfig/userFeedbackScale`` / ``RetrievalConfig/selfAssessmentScale``
   — trust scales applied during reinforcement.
-- ``RetrievalConfig/recentActsWindow`` — how many pending acts the analysis
-  runner sees.
+- ``RetrievalConfig/feedbackRate`` — interpolation rate toward `±1` per
+  reinforcement.

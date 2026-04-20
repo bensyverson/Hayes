@@ -1,13 +1,10 @@
 import Foundation
 import Operator
 
-/// Turns a completed agent run into the structured artifacts Hayes needs to
-/// persist: techniques / generalizations (`moves`) and per-act attribution
-/// from both the user's message (`user_feedback`) and the agent's own
-/// thinking trace (`self_assessment`).
-///
-/// A single LLM call emits all three artifacts as JSON. See
-/// ``MemoryPrompts/analysis`` for the prompt.
+/// Turns a completed agent run into a list of ``Lesson``s — each
+/// pairing a seed (the kind of work) with a behavior (a specific
+/// choice) and a signed sentiment. A single LLM call emits the list as
+/// JSON. See ``MemoryPrompts/analysis`` for the prompt.
 public struct AnalysisRunner: Sendable {
     private let llm: any LLMClient
 
@@ -25,31 +22,6 @@ public struct AnalysisRunner: Sendable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .prefix(280)
             return "Analysis LLM returned non-conforming JSON: \(snippet)"
-        }
-    }
-
-    /// A compact summary of a prior act, passed as context to the LLM.
-    ///
-    /// The LLM sees the act's id + the texts of its behavior nodes + its
-    /// timestamp — enough to decide whether the current user message or
-    /// thinking trace attributes anything to it.
-    public struct RecentActSummary: Friendly {
-        /// The act's identifier.
-        public let id: String
-        /// The behavior-node texts associated with the act.
-        public let behaviors: [String]
-        /// The act's creation timestamp.
-        public let createdAt: Date
-
-        /// Creates a new summary.
-        /// - Parameters:
-        ///   - id: The act's identifier.
-        ///   - behaviors: The act's behavior-node texts.
-        ///   - createdAt: The act's creation timestamp.
-        public init(id: String, behaviors: [String], createdAt: Date) {
-            self.id = id
-            self.behaviors = behaviors
-            self.createdAt = createdAt
         }
     }
 
@@ -73,18 +45,15 @@ public struct AnalysisRunner: Sendable {
     ///   - messages: The conversation slice to analyse.
     ///   - thinking: The agent's concatenated thinking trace across the
     ///     run. Empty string if the run produced none.
-    ///   - recentActs: The list of prior pending acts the LLM may attribute to.
     /// - Returns: A parsed ``AnalysisResult``.
     /// - Throws: ``InvalidJSON`` if the response can't be decoded.
     public func analyze(
         messages: [Operator.Message],
-        thinking: String,
-        recentActs: [RecentActSummary]
+        thinking: String
     ) async throws -> AnalysisResult {
         let payload = AnalysisRunner.formatPayload(
             messages: messages,
-            thinking: thinking,
-            recentActs: recentActs
+            thinking: thinking
         )
         let raw = try await llm.complete(
             systemPrompt: MemoryPrompts.analysis,
@@ -95,17 +64,8 @@ public struct AnalysisRunner: Sendable {
 
     static func formatPayload(
         messages: [Operator.Message],
-        thinking: String,
-        recentActs: [RecentActSummary]
+        thinking: String
     ) -> String {
-        let actsLines: String = if recentActs.isEmpty {
-            "(none)"
-        } else {
-            recentActs.map { act in
-                "- \(act.id): \(act.behaviors.joined(separator: ", "))"
-            }.joined(separator: "\n")
-        }
-
         let redacted = redactMedia(in: messages)
         let conversationJSON = encodeMessages(redacted)
 
@@ -115,9 +75,6 @@ public struct AnalysisRunner: Sendable {
 
         THINKING TRACE:
         \(thinking)
-
-        RECENT PENDING ACTS:
-        \(actsLines)
         """
     }
 

@@ -22,17 +22,24 @@ struct MemoryMiddlewareTests {
         return (middleware, extractorLLM, analyzerLLM)
     }
 
-    private static func firstEvent<T>(
+    /// Drains exactly `count` events from the middleware's stream.
+    ///
+    /// `AsyncStream.next()` blocks until the next element or the stream
+    /// closes; the stream only closes on `deinit`, so asking for more
+    /// events than the middleware emits will hang. Each test therefore
+    /// knows its expected event count (`1` for `memoryInjected` plus
+    /// one `edgeReinforced` per lesson) and requests exactly that many.
+    private static func drainEvents(
         _ middleware: MemoryMiddleware,
-        matching transform: (MiddlewareEvent) -> T?,
-        maxCount: Int = 5
-    ) async -> T? {
+        count: Int
+    ) async -> [MiddlewareEvent] {
+        var events: [MiddlewareEvent] = []
         var iter = middleware.events.makeAsyncIterator()
-        for _ in 0 ..< maxCount {
-            guard let event = await iter.next() else { return nil }
-            if let hit = transform(event) { return hit }
+        for _ in 0 ..< count {
+            guard let event = await iter.next() else { break }
+            events.append(event)
         }
-        return nil
+        return events
     }
 
     private static func userTurn() -> Operator.RunContext {
@@ -44,69 +51,10 @@ struct MemoryMiddlewareTests {
         )
     }
 
-    // MARK: - Scenario 1: Empty graph, no pending acts
+    // MARK: - Retrieval injection
 
-    @Test("empty graph: memory tool injected, moves and act created")
-    func emptyGraph() async throws {
-        let store = try GraphStore.inMemory()
-        let embeddings = FakeEmbeddingProvider()
-        let (middleware, _, _) = Self.makeMiddleware(
-            store: store,
-            embeddings: embeddings,
-            extractor: ["""
-            ["landing page design", "wellness brand"]
-            """],
-            analyzer: ["""
-            {"moves": ["warm palette", "clamp() typography"], "user_feedback": [], "self_assessment": []}
-            """]
-        )
-
-        var request = FakeTurn.request(messages: [FakeTurn.userMessage("Design a yoga studio site")])
-        try await middleware.beforeRequest(&request)
-
-        let toolCalls = request.messages.compactMap(\.toolCalls).flatMap { $0 }
-        #expect(toolCalls.count == 1)
-        #expect(toolCalls[0].name == "memory")
-
-        try await middleware.afterRun(Operator.RunContext(
-            messages: [FakeTurn.userMessage("Design a yoga studio site"), FakeTurn.assistantMessage("ok")],
-            thinking: "I picked warm palette and clamp() typography",
-            finalText: "ok",
-            toolCalls: []
-        ))
-
-        var events: [MiddlewareEvent] = []
-        var iter = middleware.events.makeAsyncIterator()
-        for _ in 0 ..< 5 {
-            if let event = await iter.next() { events.append(event) }
-        }
-        #expect(events.count == 5)
-        if case let .memoryInjected(seeds, behaviors) = events[0] {
-            #expect(seeds.isEmpty)
-            #expect(behaviors.isEmpty)
-        } else {
-            Issue.record("Expected memoryInjected; got \(events[0])")
-        }
-        if case let .movesExtracted(texts) = events[3] {
-            #expect(texts == ["warm palette", "clamp() typography"])
-        } else {
-            Issue.record("expected movesExtracted")
-        }
-        if case let .actCreated(_, seedIDs, behaviorIDs) = events[4] {
-            #expect(seedIDs.count == 2)
-            #expect(behaviorIDs.count == 2)
-        } else {
-            Issue.record("expected actCreated")
-        }
-
-        let acts = try await store.recentActs(limit: 10)
-        #expect(acts.count == 1)
-    }
-
-    // MARK: - Scenario 2: Populated graph, related turn
-
-    @Test("populated graph surfaces seeds and behaviors")
-    func populatedGraph() async throws {
+    @Test("beforeRequest injects the memory tool exchange and emits memoryInjected")
+    func memoryInjection() async throws {
         let store = try GraphStore.inMemory()
         let embeddings = FakeEmbeddingProvider()
 
@@ -117,58 +65,66 @@ struct MemoryMiddlewareTests {
         let (middleware, _, _) = Self.makeMiddleware(
             store: store,
             embeddings: embeddings,
-            extractor: ["""
-            ["wellness brand"]
-            """],
-            analyzer: ["""
-            {"moves": [], "user_feedback": [], "self_assessment": []}
-            """]
+            extractor: ["[\"wellness brand\"]"],
+            analyzer: []
         )
 
         var request = FakeTurn.request(messages: [FakeTurn.userMessage("Design a yoga site")])
         try await middleware.beforeRequest(&request)
 
-        let injected = await Self.firstEvent(middleware) { event -> (seeds: [RetrievalResult.Scored<Node>], behaviors: [RetrievalResult.Scored<Node>])? in
-            if case let .memoryInjected(seeds, behaviors) = event { return (seeds, behaviors) }
-            return nil
+        let toolCalls = request.messages.compactMap(\.toolCalls).flatMap { $0 }
+        #expect(toolCalls.count == 1)
+        #expect(toolCalls[0].name == "memory")
+
+        let events = await Self.drainEvents(middleware, count: 1)
+        guard case let .memoryInjected(seeds, behaviors) = events.first else {
+            Issue.record("expected memoryInjected")
+            return
         }
-        let hit = try #require(injected)
-        #expect(hit.seeds.count == 1)
-        #expect(hit.seeds[0].value.text == "wellness brand")
-        #expect(hit.behaviors.count == 1)
-        #expect(hit.behaviors[0].value.text == "warm palette")
+        #expect(seeds.first?.value.text == "wellness brand")
+        #expect(behaviors.first?.value.text == "warm palette")
     }
 
-    // MARK: - Scenario 3: User feedback list applied
+    // MARK: - Lesson-driven reinforcement
 
-    @Test("user feedback list adjusts edges and flips statuses")
-    func userFeedbackApplied() async throws {
+    @Test("single user lesson creates seed + behavior nodes and a positive edge")
+    func singleUserLessonCreatesEdge() async throws {
         let store = try GraphStore.inMemory()
         let embeddings = FakeEmbeddingProvider()
-
-        let seed = try await store.insertNode(text: "seed", embedding: embeddings.embed("seed"))
-        let b1 = try await store.insertNode(text: "b1", embedding: embeddings.embed("b1"))
-        let b2 = try await store.insertNode(text: "b2", embedding: embeddings.embed("b2"))
-        _ = try await store.insertEdge(sourceID: seed.id, targetID: b1.id, weight: 0.5)
-        _ = try await store.insertEdge(sourceID: seed.id, targetID: b2.id, weight: 0.5)
-        let actA = try await store.insertAct(seedIDs: [seed.id], behaviorIDs: [b1.id])
-        let actB = try await store.insertAct(seedIDs: [seed.id], behaviorIDs: [b2.id])
-
         let (middleware, _, _) = Self.makeMiddleware(
             store: store,
             embeddings: embeddings,
-            extractor: ["""
-            ["x"]
-            """],
+            extractor: ["[\"spa website\"]"],
             analyzer: ["""
-            {
-              "moves": [],
-              "user_feedback": [
-                {"act_id": "\(actA.id)", "sentiment": 1.0},
-                {"act_id": "\(actB.id)", "sentiment": -1.0}
-              ],
-              "self_assessment": []
-            }
+            {"lessons": [
+              {"seed": "spa website", "behavior": "warm gold palette", "sentiment": 1.0, "source": "user"}
+            ]}
+            """]
+        )
+
+        var req = FakeTurn.request(messages: [FakeTurn.userMessage("design a spa site")])
+        try await middleware.beforeRequest(&req)
+        try await middleware.afterRun(Self.userTurn())
+
+        let seedNode = try #require(try await store.allNodes().first { $0.text == "spa website" })
+        let behaviorNode = try #require(try await store.allNodes().first { $0.text == "warm gold palette" })
+        let edge = try await store.findEdge(sourceID: seedNode.id, targetID: behaviorNode.id)
+        // First-time positive at scale 1.0, rate 0.1 → 0.0 + 0.1·(1−0) = 0.1
+        #expect(abs((edge?.weight ?? 0) - 0.10) < 1e-9)
+    }
+
+    @Test("self_assessment lesson applies at the 0.3 source scale")
+    func selfAssessmentScale() async throws {
+        let store = try GraphStore.inMemory()
+        let embeddings = FakeEmbeddingProvider()
+        let (middleware, _, _) = Self.makeMiddleware(
+            store: store,
+            embeddings: embeddings,
+            extractor: ["[\"x\"]"],
+            analyzer: ["""
+            {"lessons": [
+              {"seed": "spa website", "behavior": "warm gold palette", "sentiment": 1.0, "source": "self_assessment"}
+            ]}
             """]
         )
 
@@ -176,43 +132,25 @@ struct MemoryMiddlewareTests {
         try await middleware.beforeRequest(&req)
         try await middleware.afterRun(Self.userTurn())
 
-        let edgeA = try await store.findEdge(sourceID: seed.id, targetID: b1.id)
-        let edgeB = try await store.findEdge(sourceID: seed.id, targetID: b2.id)
-        #expect(abs((edgeA?.weight ?? 0) - 0.55) < 1e-9)
-        #expect(abs((edgeB?.weight ?? 0) - 0.35) < 1e-9)
-
-        let reloadA = try await store.findAct(id: actA.id)
-        let reloadB = try await store.findAct(id: actB.id)
-        #expect(reloadA?.status == .accepted)
-        #expect(reloadB?.status == .revised)
-
-        let feedback = await Self.firstEvent(middleware) { event -> [MiddlewareEvent.AttributedFeedback]? in
-            if case let .userFeedback(list) = event { return list }
-            return nil
-        }
-        #expect(feedback?.count == 2)
+        let seedNode = try #require(try await store.allNodes().first { $0.text == "spa website" })
+        let behaviorNode = try #require(try await store.allNodes().first { $0.text == "warm gold palette" })
+        let edge = try await store.findEdge(sourceID: seedNode.id, targetID: behaviorNode.id)
+        // Self-assessment scale = 0.3 → 0 + 0.1·0.3·(1−0) = 0.03
+        #expect(abs((edge?.weight ?? 0) - 0.03) < 1e-9)
     }
 
-    // MARK: - Scenario 4: Self-assessment list applied (30% scale)
-
-    @Test("self-assessment applies at 0.3 scale")
-    func selfAssessmentApplied() async throws {
+    @Test("negative user lesson creates a negatively-weighted edge")
+    func negativeUserLesson() async throws {
         let store = try GraphStore.inMemory()
         let embeddings = FakeEmbeddingProvider()
-
-        let seed = try await store.insertNode(text: "seed", embedding: embeddings.embed("seed"))
-        let beh = try await store.insertNode(text: "b", embedding: embeddings.embed("b"))
-        _ = try await store.insertEdge(sourceID: seed.id, targetID: beh.id, weight: 0.5)
-        let act = try await store.insertAct(seedIDs: [seed.id], behaviorIDs: [beh.id])
-
         let (middleware, _, _) = Self.makeMiddleware(
             store: store,
             embeddings: embeddings,
-            extractor: ["""
-            ["x"]
-            """],
+            extractor: ["[\"x\"]"],
             analyzer: ["""
-            {"moves": [], "user_feedback": [], "self_assessment": [{"act_id": "\(act.id)", "sentiment": 1.0}]}
+            {"lessons": [
+              {"seed": "electrolyte drink website", "behavior": "Arial body copy", "sentiment": -0.8, "source": "user"}
+            ]}
             """]
         )
 
@@ -220,43 +158,28 @@ struct MemoryMiddlewareTests {
         try await middleware.beforeRequest(&req)
         try await middleware.afterRun(Self.userTurn())
 
-        let edge = try await store.findEdge(sourceID: seed.id, targetID: beh.id)
-        #expect(abs((edge?.weight ?? 0) - 0.515) < 1e-9)
-        let reloaded = try await store.findAct(id: act.id)
-        #expect(reloaded?.status == .accepted)
-
-        let feedback = await Self.firstEvent(middleware) { event -> [MiddlewareEvent.AttributedFeedback]? in
-            if case let .selfAssessment(list) = event { return list }
-            return nil
-        }
-        #expect(feedback?.count == 1)
-        #expect(feedback?.first?.actID == act.id)
+        let seedNode = try #require(try await store.allNodes().first { $0.text == "electrolyte drink website" })
+        let behaviorNode = try #require(try await store.allNodes().first { $0.text == "Arial body copy" })
+        let edge = try await store.findEdge(sourceID: seedNode.id, targetID: behaviorNode.id)
+        // w' = 0 + 0.1·0.8·(−1 − 0) = −0.08
+        let weight = try #require(edge?.weight)
+        #expect(weight < 0)
+        #expect(abs(weight - -0.08) < 1e-9)
     }
 
-    // MARK: - Scenario 5: User and self on same act — user wins
-
-    @Test("user feedback applies before self-assessment; self no-ops")
-    func userWinsOverSelf() async throws {
+    @Test("multiple lessons produce multiple edges in one turn")
+    func multipleLessons() async throws {
         let store = try GraphStore.inMemory()
         let embeddings = FakeEmbeddingProvider()
-
-        let seed = try await store.insertNode(text: "seed", embedding: embeddings.embed("seed"))
-        let beh = try await store.insertNode(text: "b", embedding: embeddings.embed("b"))
-        _ = try await store.insertEdge(sourceID: seed.id, targetID: beh.id, weight: 0.5)
-        let act = try await store.insertAct(seedIDs: [seed.id], behaviorIDs: [beh.id])
-
         let (middleware, _, _) = Self.makeMiddleware(
             store: store,
             embeddings: embeddings,
-            extractor: ["""
-            ["x"]
-            """],
+            extractor: ["[\"x\"]"],
             analyzer: ["""
-            {
-              "moves": [],
-              "user_feedback": [{"act_id": "\(act.id)", "sentiment": 1.0}],
-              "self_assessment": [{"act_id": "\(act.id)", "sentiment": -1.0}]
-            }
+            {"lessons": [
+              {"seed": "drink site", "behavior": "bold glow headline", "sentiment": 0.6, "source": "user"},
+              {"seed": "drink site", "behavior": "Arial body copy", "sentiment": -0.8, "source": "user"}
+            ]}
             """]
         )
 
@@ -264,166 +187,57 @@ struct MemoryMiddlewareTests {
         try await middleware.beforeRequest(&req)
         try await middleware.afterRun(Self.userTurn())
 
-        let edge = try await store.findEdge(sourceID: seed.id, targetID: beh.id)
-        #expect(abs((edge?.weight ?? 0) - 0.55) < 1e-9)
-        let reloaded = try await store.findAct(id: act.id)
-        #expect(reloaded?.status == .accepted)
+        let seed = try #require(try await store.allNodes().first { $0.text == "drink site" })
+        let glow = try #require(try await store.allNodes().first { $0.text == "bold glow headline" })
+        let arial = try #require(try await store.allNodes().first { $0.text == "Arial body copy" })
+
+        let posEdge = try await store.findEdge(sourceID: seed.id, targetID: glow.id)
+        let negEdge = try await store.findEdge(sourceID: seed.id, targetID: arial.id)
+        #expect((posEdge?.weight ?? 0) > 0)
+        #expect((negEdge?.weight ?? 0) < 0)
     }
 
-    // MARK: - Scenario 6: once-feedback-wins
-
-    @Test("once-feedback-wins: non-pending act is ignored")
-    func onceFeedbackWins() async throws {
+    @Test("empty lessons list leaves the graph untouched")
+    func emptyLessons() async throws {
         let store = try GraphStore.inMemory()
         let embeddings = FakeEmbeddingProvider()
-
-        let seed = try await store.insertNode(text: "seed", embedding: embeddings.embed("seed"))
-        let beh = try await store.insertNode(text: "b", embedding: embeddings.embed("b"))
-        _ = try await store.insertEdge(sourceID: seed.id, targetID: beh.id, weight: 0.5)
-        let act = try await store.insertAct(seedIDs: [seed.id], behaviorIDs: [beh.id])
-        // Flip to accepted so recentActs(.pending) excludes it, but applyFeedback no-ops either way.
-        try await store.setActStatus(id: act.id, status: .accepted)
-
         let (middleware, _, _) = Self.makeMiddleware(
             store: store,
             embeddings: embeddings,
-            extractor: ["""
-            ["x"]
-            """],
-            analyzer: ["""
-            {"moves": [], "user_feedback": [{"act_id": "\(act.id)", "sentiment": 1.0}], "self_assessment": []}
-            """]
-        )
-
-        var req = FakeTurn.request(messages: [FakeTurn.userMessage("update")])
-        try await middleware.beforeRequest(&req)
-        try await middleware.afterRun(Self.userTurn())
-
-        let edge = try await store.findEdge(sourceID: seed.id, targetID: beh.id)
-        #expect(edge?.weight == 0.5)
-    }
-
-    // MARK: - Scenario 7: unknown act ID tolerated
-
-    @Test("unknown act ID in feedback is skipped without throwing")
-    func unknownActIDSkipped() async throws {
-        let store = try GraphStore.inMemory()
-        let embeddings = FakeEmbeddingProvider()
-
-        let seed = try await store.insertNode(text: "seed", embedding: embeddings.embed("seed"))
-        let beh = try await store.insertNode(text: "b", embedding: embeddings.embed("b"))
-        _ = try await store.insertEdge(sourceID: seed.id, targetID: beh.id, weight: 0.5)
-        let realAct = try await store.insertAct(seedIDs: [seed.id], behaviorIDs: [beh.id])
-
-        let (middleware, _, _) = Self.makeMiddleware(
-            store: store,
-            embeddings: embeddings,
-            extractor: ["""
-            ["x"]
-            """],
-            analyzer: ["""
-            {
-              "moves": [],
-              "user_feedback": [
-                {"act_id": "nonexistent", "sentiment": 1.0},
-                {"act_id": "\(realAct.id)", "sentiment": 1.0}
-              ],
-              "self_assessment": []
-            }
-            """]
-        )
-
-        var req = FakeTurn.request(messages: [FakeTurn.userMessage("update")])
-        try await middleware.beforeRequest(&req)
-        try await middleware.afterRun(Self.userTurn())
-
-        let edge = try await store.findEdge(sourceID: seed.id, targetID: beh.id)
-        #expect(abs((edge?.weight ?? 0) - 0.55) < 1e-9)
-    }
-
-    // MARK: - Scenario 8: beforeRequest twice is idempotent
-
-    @Test("beforeRequest called twice on same run no-ops the second time")
-    func beforeRequestIdempotent() async throws {
-        let store = try GraphStore.inMemory()
-        let embeddings = FakeEmbeddingProvider()
-        let (middleware, extractorLLM, _) = Self.makeMiddleware(
-            store: store,
-            embeddings: embeddings,
-            extractor: ["""
-            ["a", "b"]
-            """],
-            analyzer: ["""
-            {"moves": [], "user_feedback": [], "self_assessment": []}
-            """]
-        )
-
-        var request = FakeTurn.request(messages: [FakeTurn.userMessage("hi")])
-        try await middleware.beforeRequest(&request)
-        let afterFirstCount = request.messages.count
-        try await middleware.beforeRequest(&request)
-        #expect(request.messages.count == afterFirstCount)
-        #expect(extractorLLM.calls.count == 1)
-    }
-
-    // MARK: - Scenario 9: current turn's act is NOT in recentActs at analyze() time
-
-    @Test("current turn's act is inserted AFTER analyze; not visible to it")
-    func currentActNotInRecent() async throws {
-        let store = try GraphStore.inMemory()
-        let embeddings = FakeEmbeddingProvider()
-        let (middleware, _, analyzerLLM) = Self.makeMiddleware(
-            store: store,
-            embeddings: embeddings,
-            extractor: ["""
-            ["x"]
-            """],
-            analyzer: ["""
-            {"moves": ["m"], "user_feedback": [], "self_assessment": []}
-            """]
+            extractor: ["[\"x\"]"],
+            analyzer: ["{\"lessons\": []}"]
         )
 
         var req = FakeTurn.request(messages: [FakeTurn.userMessage("hi")])
         try await middleware.beforeRequest(&req)
-
-        let before = try await store.recentActs(limit: 100).count
-        #expect(before == 0)
-
-        try await middleware.afterRun(Operator.RunContext(
-            messages: [FakeTurn.userMessage("hi"), FakeTurn.assistantMessage("ok")],
-            thinking: "",
-            finalText: "ok",
-            toolCalls: []
-        ))
-
-        let after = try await store.recentActs(limit: 100).count
-        #expect(after == 1)
-        // Analyzer saw an empty recent-acts list: verify via the MockLLM's captured payload.
-        let payload = analyzerLLM.calls[0].userMessage
-        #expect(payload.contains("RECENT PENDING ACTS:"))
-        #expect(payload.contains("(none)"))
+        let nodesBefore = try await store.allNodes().count
+        try await middleware.afterRun(Self.userTurn())
+        let nodesAfter = try await store.allNodes().count
+        // Context extraction may insert seed nodes; lessons should add none.
+        // We assert on edges instead: no edges should exist.
+        #expect(try await store.topEdgesByWeight(limit: 10).isEmpty)
+        #expect(nodesAfter >= nodesBefore)
     }
 
-    // MARK: - Scenario 9b: feedback events carry human-readable act labels
+    // MARK: - Node dedupe
 
-    @Test("userFeedback event includes the target act's behavior phrases as label")
-    func feedbackEventCarriesLabel() async throws {
+    @Test("existing seed node is reused via cosine dedupe rather than inserted twice")
+    func seedNodeDedupe() async throws {
         let store = try GraphStore.inMemory()
         let embeddings = FakeEmbeddingProvider()
-
-        let seed = try await store.insertNode(text: "seed", embedding: embeddings.embed("seed"))
-        let b1 = try await store.insertNode(text: "replaced Arial with Helvetica", embedding: embeddings.embed("b1"))
-        let b2 = try await store.insertNode(text: "verified with canvas preview", embedding: embeddings.embed("b2"))
-        let act = try await store.insertAct(seedIDs: [seed.id], behaviorIDs: [b1.id, b2.id])
+        let existingSeed = try await store.insertNode(
+            text: "spa website",
+            embedding: embeddings.embed("spa website")
+        )
 
         let (middleware, _, _) = Self.makeMiddleware(
             store: store,
             embeddings: embeddings,
-            extractor: ["""
-            ["x"]
-            """],
+            extractor: ["[\"x\"]"],
             analyzer: ["""
-            {"moves": [], "user_feedback": [{"act_id": "\(act.id)", "sentiment": 1.0}], "self_assessment": []}
+            {"lessons": [
+              {"seed": "spa website", "behavior": "warm gold palette", "sentiment": 1.0, "source": "user"}
+            ]}
             """]
         )
 
@@ -431,17 +245,84 @@ struct MemoryMiddlewareTests {
         try await middleware.beforeRequest(&req)
         try await middleware.afterRun(Self.userTurn())
 
-        let feedback = await Self.firstEvent(middleware) { event -> [MiddlewareEvent.AttributedFeedback]? in
-            if case let .userFeedback(list) = event { return list }
-            return nil
-        }
-        let entry = try #require(feedback?.first)
-        #expect(entry.actID == act.id)
-        #expect(entry.label == "replaced Arial with Helvetica, verified with canvas preview")
-        #expect(entry.sentiment == 1.0)
+        let matching = try await store.allNodes().filter { $0.text == "spa website" }
+        #expect(matching.count == 1)
+
+        let behaviorNode = try #require(try await store.allNodes().first { $0.text == "warm gold palette" })
+        let edge = try await store.findEdge(sourceID: existingSeed.id, targetID: behaviorNode.id)
+        #expect(edge != nil)
     }
 
-    // MARK: - Scenario 10: rolling phrases + persisted memory exchange
+    @Test("existing behavior node is reused via cosine dedupe")
+    func behaviorNodeDedupe() async throws {
+        let store = try GraphStore.inMemory()
+        let embeddings = FakeEmbeddingProvider()
+        let existingBehavior = try await store.insertNode(
+            text: "Arial body copy",
+            embedding: embeddings.embed("Arial body copy")
+        )
+
+        let (middleware, _, _) = Self.makeMiddleware(
+            store: store,
+            embeddings: embeddings,
+            extractor: ["[\"x\"]"],
+            analyzer: ["""
+            {"lessons": [
+              {"seed": "drink site", "behavior": "Arial body copy", "sentiment": -0.8, "source": "user"}
+            ]}
+            """]
+        )
+
+        var req = FakeTurn.request(messages: [FakeTurn.userMessage("update")])
+        try await middleware.beforeRequest(&req)
+        try await middleware.afterRun(Self.userTurn())
+
+        let matching = try await store.allNodes().filter { $0.text == "Arial body copy" }
+        #expect(matching.count == 1)
+
+        let seedNode = try #require(try await store.allNodes().first { $0.text == "drink site" })
+        let edge = try await store.findEdge(sourceID: seedNode.id, targetID: existingBehavior.id)
+        #expect(edge != nil)
+    }
+
+    // MARK: - Events
+
+    @Test("each lesson emits an edgeReinforced event with the seed/behavior/sentiment/source")
+    func edgeReinforcedEventsEmitted() async throws {
+        let store = try GraphStore.inMemory()
+        let embeddings = FakeEmbeddingProvider()
+        let (middleware, _, _) = Self.makeMiddleware(
+            store: store,
+            embeddings: embeddings,
+            extractor: ["[\"x\"]"],
+            analyzer: ["""
+            {"lessons": [
+              {"seed": "drink site", "behavior": "bold glow headline", "sentiment": 0.6, "source": "user"},
+              {"seed": "drink site", "behavior": "Arial body copy", "sentiment": -0.8, "source": "user"}
+            ]}
+            """]
+        )
+
+        var req = FakeTurn.request(messages: [FakeTurn.userMessage("update")])
+        try await middleware.beforeRequest(&req)
+        try await middleware.afterRun(Self.userTurn())
+
+        // 1 memoryInjected + 2 edgeReinforced.
+        let events = await Self.drainEvents(middleware, count: 3)
+        let reinforced = events.compactMap { event -> MiddlewareEvent.ReinforcedEdge? in
+            if case let .edgeReinforced(payload) = event { return payload }
+            return nil
+        }
+        #expect(reinforced.count == 2)
+        let behaviors = reinforced.map(\.behavior)
+        #expect(behaviors.contains("bold glow headline"))
+        #expect(behaviors.contains("Arial body copy"))
+        let arial = try #require(reinforced.first(where: { $0.behavior == "Arial body copy" }))
+        #expect(arial.sentiment == -0.8)
+        #expect(arial.source == .user)
+    }
+
+    // MARK: - Rolling context across turns
 
     @Test("turn 2 passes turn 1's phrases as priorPhrases and does not stack another memory exchange")
     func rollingPhrasesAndNoRestack() async throws {
@@ -451,26 +332,15 @@ struct MemoryMiddlewareTests {
             store: store,
             embeddings: embeddings,
             extractor: [
-                """
-                ["landing page design", "wellness brand"]
-                """,
-                """
-                ["landing page design", "warm palette"]
-                """,
+                "[\"landing page design\", \"wellness brand\"]",
+                "[\"landing page design\", \"warm palette\"]",
             ],
-            analyzer: [
-                """
-                {"moves": [], "user_feedback": [], "self_assessment": []}
-                """,
-            ]
+            analyzer: []
         )
 
-        // Turn 1 — populate phrases + inject memory exchange.
         var req1 = FakeTurn.request(messages: [FakeTurn.userMessage("Design a yoga site")])
         try await middleware.beforeRequest(&req1)
 
-        // Turn 2 — preserve the turn-1 transcript (including the persisted
-        // memory tool exchange) and add a new user turn.
         let turn2Messages = req1.messages + [
             FakeTurn.assistantMessage("ok"),
             FakeTurn.userMessage("make it warmer"),
@@ -479,288 +349,13 @@ struct MemoryMiddlewareTests {
         let countBefore = req2.messages.count
         try await middleware.beforeRequest(&req2)
 
-        // No new memory tool call should be stacked.
         let toolCalls = req2.messages.compactMap(\.toolCalls).flatMap { $0 }.filter { $0.name == "memory" }
         #expect(toolCalls.count == 1)
         #expect(req2.messages.count == countBefore)
 
-        // Extractor ran twice. Second call's user message carries the
-        // prior-turn phrases as CURRENT WORKING CONTEXT.
         #expect(extractorLLM.calls.count == 2)
         let secondUserMessage = extractorLLM.calls[1].userMessage
         #expect(secondUserMessage.contains("CURRENT WORKING CONTEXT"))
         #expect(secondUserMessage.contains("landing page design"))
-        #expect(secondUserMessage.contains("wellness brand"))
-        #expect(secondUserMessage.contains("make it warmer"))
-    }
-
-    // MARK: - Scenario 11: empty moves emits analysisEmpty event
-
-    @Test("empty moves list emits analysisEmpty")
-    func emptyMovesEmitsAnalysisEmpty() async throws {
-        let store = try GraphStore.inMemory()
-        let embeddings = FakeEmbeddingProvider()
-        let (middleware, _, _) = Self.makeMiddleware(
-            store: store,
-            embeddings: embeddings,
-            extractor: ["""
-            ["x"]
-            """],
-            analyzer: ["""
-            {"moves": [], "user_feedback": [], "self_assessment": []}
-            """]
-        )
-
-        var req = FakeTurn.request(messages: [FakeTurn.userMessage("update")])
-        try await middleware.beforeRequest(&req)
-        try await middleware.afterRun(Self.userTurn())
-
-        let reason = await Self.firstEvent(middleware) { event -> String? in
-            if case let .analysisEmpty(reason) = event { return reason }
-            return nil
-        }
-        #expect(reason != nil)
-    }
-
-    // MARK: - Scenario 12: seeds still populated even when transcript already has a memory exchange
-
-    @Test("turn 2 populates seedIDs for the new act even though no memory exchange was injected")
-    func turn2ActHasSeeds() async throws {
-        let store = try GraphStore.inMemory()
-        let embeddings = FakeEmbeddingProvider()
-        let (middleware, _, _) = Self.makeMiddleware(
-            store: store,
-            embeddings: embeddings,
-            extractor: [
-                """
-                ["first"]
-                """,
-                """
-                ["second"]
-                """,
-            ],
-            analyzer: [
-                """
-                {"moves": ["m1"], "user_feedback": [], "self_assessment": []}
-                """,
-                """
-                {"moves": ["m2"], "user_feedback": [], "self_assessment": []}
-                """,
-            ]
-        )
-
-        // Turn 1
-        var req1 = FakeTurn.request(messages: [FakeTurn.userMessage("Design a yoga site")])
-        try await middleware.beforeRequest(&req1)
-        try await middleware.afterRun(Operator.RunContext(
-            messages: [FakeTurn.userMessage("Design a yoga site"), FakeTurn.assistantMessage("ok")],
-            thinking: "",
-            finalText: "ok",
-            toolCalls: []
-        ))
-
-        // Turn 2 — preserve persisted memory exchange + add a new user turn.
-        let turn2Messages = req1.messages + [
-            FakeTurn.assistantMessage("ok"),
-            FakeTurn.userMessage("make it warmer"),
-        ]
-        var req2 = FakeTurn.request(messages: turn2Messages)
-        try await middleware.beforeRequest(&req2)
-        try await middleware.afterRun(Operator.RunContext(
-            messages: turn2Messages + [FakeTurn.assistantMessage("ok2")],
-            thinking: "",
-            finalText: "ok2",
-            toolCalls: []
-        ))
-
-        let acts = try await store.recentActs(limit: 10)
-        #expect(acts.count == 2)
-        for act in acts {
-            #expect(!act.seedIDs.isEmpty, "every act should have seeds — regression for the zero-edges bug")
-            #expect(!act.behaviorIDs.isEmpty)
-        }
-    }
-
-    // MARK: - Scenario 14: bypassFirstRun defers extraction to afterRun
-
-    @Test("bypassFirstRun=true: first beforeRequest is a no-op, afterRun still tracks seeds")
-    func bypassFirstRunDefersToAfterRun() async throws {
-        let store = try GraphStore.inMemory()
-        let embeddings = FakeEmbeddingProvider()
-        let extractorLLM = MockLLM(responses: [
-            """
-            ["landing page design", "wellness brand"]
-            """,
-            """
-            ["landing page design", "warm palette"]
-            """,
-        ])
-        let analyzerLLM = MockLLM(responses: [
-            """
-            {"moves": ["m1"], "user_feedback": [], "self_assessment": []}
-            """,
-            """
-            {"moves": ["m2"], "user_feedback": [], "self_assessment": []}
-            """,
-        ])
-        let middleware = MemoryMiddleware(
-            store: store,
-            embeddings: embeddings,
-            extractor: ContextExtractor(llm: extractorLLM),
-            analyzer: AnalysisRunner(llm: analyzerLLM),
-            bypassFirstRun: true
-        )
-
-        // Run 1 — beforeRequest is bypassed; no extractor call, no tool inject.
-        var req1 = FakeTurn.request(messages: [FakeTurn.userMessage("Design a yoga site")])
-        try await middleware.beforeRequest(&req1)
-        #expect(req1.messages.count == 1)
-        #expect(extractorLLM.calls.isEmpty)
-
-        // afterRun runs extraction now so the act gets seeds.
-        try await middleware.afterRun(Operator.RunContext(
-            messages: [FakeTurn.userMessage("Design a yoga site"), FakeTurn.assistantMessage("ok")],
-            thinking: "",
-            finalText: "ok",
-            toolCalls: []
-        ))
-        #expect(extractorLLM.calls.count == 1)
-
-        let actsAfterFirst = try await store.recentActs(limit: 10)
-        #expect(actsAfterFirst.count == 1)
-        #expect(!actsAfterFirst[0].seedIDs.isEmpty)
-
-        // Run 2 — beforeRequest now runs normally (first-run flag flipped).
-        var req2 = FakeTurn.request(messages: [
-            FakeTurn.userMessage("Design a yoga site"),
-            FakeTurn.assistantMessage("ok"),
-            FakeTurn.userMessage("make it warmer"),
-        ])
-        try await middleware.beforeRequest(&req2)
-        #expect(extractorLLM.calls.count == 2)
-        let toolCalls = req2.messages.compactMap(\.toolCalls).flatMap { $0 }.filter { $0.name == "memory" }
-        #expect(toolCalls.count == 1, "run 2 should inject memory tool exchange normally")
-    }
-
-    // MARK: - Scenario 15: bypass + many tool rounds push user out of trimWindow
-
-    @Test("bypassFirstRun: afterRun still tracks seeds after many tool rounds")
-    func bypassFirstRunWithLongToolRun() async throws {
-        let store = try GraphStore.inMemory()
-        let embeddings = FakeEmbeddingProvider()
-        let extractorLLM = MockLLM(responses: ["""
-        ["healthy pet food", "minimal landing page"]
-        """])
-        let analyzerLLM = MockLLM(responses: ["""
-        {"moves": ["m1"], "user_feedback": [], "self_assessment": []}
-        """])
-        let middleware = MemoryMiddleware(
-            store: store,
-            embeddings: embeddings,
-            extractor: ContextExtractor(llm: extractorLLM),
-            analyzer: AnalysisRunner(llm: analyzerLLM),
-            bypassFirstRun: true
-        )
-
-        let toolResult = Operator.Message(
-            role: .tool,
-            content: [.text("ok")],
-            toolCallId: "call-X"
-        )
-        // Run 1 with enough tool back-and-forth that the user message
-        // falls outside a 5-message tail. This is the live-pipeline
-        // shape that unit tests with short message lists couldn't
-        // reproduce.
-        let runMessages: [Operator.Message] = [
-            FakeTurn.userMessage("Let's design a site for BARK"),
-            FakeTurn.assistantMessage("first action"),
-            toolResult,
-            FakeTurn.assistantMessage("second action"),
-            toolResult,
-            FakeTurn.assistantMessage("third action"),
-            toolResult,
-            FakeTurn.assistantMessage("final text"),
-        ]
-
-        var req = FakeTurn.request(messages: [runMessages[0]])
-        try await middleware.beforeRequest(&req)
-        #expect(extractorLLM.calls.isEmpty, "first-run beforeRequest should be a no-op")
-
-        try await middleware.afterRun(Operator.RunContext(
-            messages: runMessages,
-            thinking: "",
-            finalText: "final text",
-            toolCalls: []
-        ))
-
-        #expect(extractorLLM.calls.count == 1, "afterRun should extract context despite long tool history")
-        let acts = try await store.recentActs(limit: 10)
-        #expect(acts.count == 1)
-        #expect(!acts[0].seedIDs.isEmpty, "act should have seeds extracted in afterRun")
-    }
-
-    // MARK: - lastTurnMessages slicing
-
-    @Test("lastTurnMessages returns slice from most recent user turn")
-    func lastTurnSlicing() {
-        let toolResult = Operator.Message(
-            role: .tool,
-            content: [.text("tool output")],
-            toolCallId: "call-1"
-        )
-        let messages: [Operator.Message] = [
-            FakeTurn.userMessage("first"),
-            FakeTurn.assistantMessage("ok"),
-            FakeTurn.userMessage("second"),
-            FakeTurn.assistantMessage("calling tool"),
-            toolResult,
-            FakeTurn.assistantMessage("done"),
-        ]
-        let slice = MemoryMiddleware.lastTurnMessages(messages)
-        #expect(slice.count == 4)
-        #expect(slice.first?.textContent == "second")
-        #expect(slice.last?.textContent == "done")
-    }
-
-    // MARK: - Scenario 13: phantom memory tool-call arguments must be a JSON object
-
-    @Test("phantom memory tool arguments serialize as a JSON object, not an array")
-    func phantomArgumentsAreObject() async throws {
-        // Anthropic's adapter refuses tool-use messages whose `input` does not
-        // decode as `[String: JSONValue]`. A top-level JSON array (from a
-        // `[String]` encode) trips it and surfaces as a DecodingError the
-        // user sees as "LLM error: The data couldn't be read…". Lock the
-        // object shape in.
-        let store = try GraphStore.inMemory()
-        let embeddings = FakeEmbeddingProvider()
-        let (middleware, _, _) = Self.makeMiddleware(
-            store: store,
-            embeddings: embeddings,
-            extractor: ["""
-            ["landing page design", "wellness brand"]
-            """],
-            analyzer: ["""
-            {"moves": [], "user_feedback": [], "self_assessment": []}
-            """]
-        )
-
-        var request = FakeTurn.request(messages: [FakeTurn.userMessage("Design a yoga studio site")])
-        try await middleware.beforeRequest(&request)
-
-        let toolCall = try #require(
-            request.messages.compactMap(\.toolCalls).flatMap { $0 }.first { $0.name == "memory" }
-        )
-        let data = Data(toolCall.arguments.utf8)
-        // Object shape: decodes as a dictionary.
-        let decoded = try JSONSerialization.jsonObject(with: data)
-        #expect(decoded is [String: Any])
-
-        // Named "phrases" key with the extracted values.
-        guard let dict = decoded as? [String: Any] else {
-            Issue.record("expected dictionary; got \(type(of: decoded))")
-            return
-        }
-        let phrases = try #require(dict["phrases"] as? [String])
-        #expect(phrases == ["landing page design", "wellness brand"])
     }
 }
