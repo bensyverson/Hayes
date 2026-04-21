@@ -10,7 +10,10 @@ struct MemoryPromptsTests {
     @Test("prompt describes a single `lessons` output shape")
     func singleLessonsShape() {
         let prompt = MemoryPrompts.analysis
-        #expect(prompt.contains("\"lessons\""))
+        // `lessons` is now the submit_analysis tool argument name rather
+        // than a wrapping JSON key, so match the bare identifier; the
+        // nested fields still appear quoted in the worked examples.
+        #expect(prompt.contains("lessons"))
         #expect(prompt.contains("\"seed\""))
         #expect(prompt.contains("\"behavior\""))
         #expect(prompt.contains("\"sentiment\""))

@@ -33,14 +33,17 @@ public enum MemoryPrompts {
 
     /// System prompt for ``AnalysisRunner``.
     ///
-    /// Single output: a list of ``Lesson``s, each pairing a seed (the
-    /// kind of work) with a behavior (a specific choice or technique)
-    /// and a signed sentiment. The middleware uses each lesson to
-    /// find-or-create seed and behavior nodes and reinforce the edge
-    /// between them. There is no intermediate act, no attribution
-    /// against a candidate act list, no separate moves/user_feedback/
-    /// self_assessment split.
+    /// Tool-call oriented: the only correct output is a single invocation
+    /// of the `submit_analysis` tool. Worked examples frame the JSON as
+    /// the `lessons` argument, not as a text response, because small
+    /// models (AFM in particular) pattern-match on example framing and
+    /// will emit JSON text if the prompt reads as "produce this JSON."
     public static let analysis: String = """
+    Your task is to call the `submit_analysis` tool with the lessons
+    distilled from this turn. Calling the tool IS the output — do NOT
+    emit any text, JSON, markdown, or explanation alongside or instead of
+    the tool call.
+
     You are analyzing a single turn of an AI design agent to extract
     lessons that should be learned from it.
 
@@ -55,15 +58,8 @@ public enum MemoryPrompts {
       the agent did from the CONVERSATION alone (especially tool
       calls and their arguments).
 
-    Return JSON ONLY with this exact shape:
-    {
-      "lessons": [
-        {"seed": "...", "behavior": "...", "sentiment": 0.7, "source": "user"},
-        ...
-      ]
-    }
-
-    Each lesson has four fields:
+    The `lessons` argument to submit_analysis is a list of objects,
+    each with four fields:
       - seed: a short phrase (2-8 words) describing the kind of work
         or context — e.g. "electrolyte drink website", "typography
         for wellness brands", "minimal spa landing page". This is
@@ -98,25 +94,27 @@ public enum MemoryPrompts {
     Worked example. The agent designs an electrolyte drink site
     using Arial for body copy, without flagging Arial explicitly.
     The user then says: "Oh cool. I hate Arial."
-    Correct output:
-    {
-      "lessons": [
-        {"seed": "electrolyte drink website", "behavior": "bold glow headline treatment", "sentiment": 0.6, "source": "user"},
-        {"seed": "electrolyte drink website", "behavior": "Arial body copy", "sentiment": -0.8, "source": "user"}
-      ]
-    }
+    Call submit_analysis with this `lessons` argument:
+    [
+      {"seed": "electrolyte drink website", "behavior": "bold glow headline treatment", "sentiment": 0.6, "source": "user"},
+      {"seed": "electrolyte drink website", "behavior": "Arial body copy", "sentiment": -0.8, "source": "user"}
+    ]
     The positive lesson attaches to the overall design the user
     approved of; the negative one is retroactive capture of the
     Arial choice the user disliked.
 
     Worked example for self_assessment. The thinking trace contains
     "I think the green CTA button looks flat; the old gold version
-    had more presence." Correct lesson:
-    {"seed": "landing page CTA button", "behavior": "green CTA button color", "sentiment": -0.5, "source": "self_assessment"}
+    had more presence." Call submit_analysis with this `lessons`
+    argument:
+    [
+      {"seed": "landing page CTA button", "behavior": "green CTA button color", "sentiment": -0.5, "source": "self_assessment"}
+    ]
 
-    Return an empty lessons array ONLY when the turn carries no
+    Pass an empty `lessons` list ONLY when the turn carries no
     evaluative content at all (e.g. a new neutral request, a pure
     clarifying question). This case is rare — most turns contain at
-    least one implicit signal.
+    least one implicit signal. Even an empty list must be delivered
+    via submit_analysis; never skip the tool call.
     """
 }

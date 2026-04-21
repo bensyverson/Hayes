@@ -16,7 +16,7 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
     private let store: GraphStore
     private let embeddings: any EmbeddingProvider
     private let extractor: ContextExtractor
-    private let analyzer: AnalysisRunner
+    private let analyzer: any Analyzing
     private let config: RetrievalConfig
     private let bypassFirstRun: Bool
 
@@ -58,7 +58,7 @@ public final class MemoryMiddleware: Middleware, @unchecked Sendable {
         store: GraphStore,
         embeddings: any EmbeddingProvider,
         extractor: ContextExtractor,
-        analyzer: AnalysisRunner,
+        analyzer: any Analyzing,
         config: RetrievalConfig = .default,
         bypassFirstRun: Bool = false
     ) {

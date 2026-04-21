@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "Hayes",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS(.v26)],
     products: [
         .library(name: "HayesCore", targets: ["HayesCore"]),
         .executable(name: "hayes", targets: ["HayesCommand"]),

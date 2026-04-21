@@ -46,31 +46,43 @@ extension ChatState {
                 return
             }
 
-            let service = LLMServiceAdapter(provider: .anthropic(apiKey: apiKey))
-            let memoryLLM = OperatorLLMClient(
-                service: service,
+            let contextService: any LLMService
+            switch args.contextBackend {
+            case .afm:
+                contextService = AppleIntelligenceService()
+            case .anthropic:
+                contextService = LLMServiceAdapter(provider: .anthropic(apiKey: apiKey))
+            }
+            let baseExtractorLLM = OperatorLLMClient(
+                service: contextService,
                 configuration: ConversationConfiguration(
                     modelType: .fast,
                     inference: .reasoning,
                     maxTokens: 2048
                 )
             )
-            // In debug builds, tee every memory-stage call to a JSONL
-            // log at `~/.hayes/memory.log` so we can inspect the exact
-            // prompt / response for each extractor and analyzer call
-            // after a run. Release builds skip the wrapper.
+
+            // In debug builds, tee every extractor call to a JSONL log
+            // at `~/.hayes/memory.log`. The analyzer no longer goes
+            // through `LLMClient` — its observability lives on the
+            // Operative event stream instead.
             let extractorLLM: any LLMClient
-            let analyzerLLM: any LLMClient
             #if DEBUG
                 let writer = LoggingLLMClient.LogWriter(url: HayesPaths.memoryLog)
-                extractorLLM = LoggingLLMClient(wrapping: memoryLLM, stage: "extractor", writer: writer)
-                analyzerLLM = LoggingLLMClient(wrapping: memoryLLM, stage: "analyzer", writer: writer)
+                extractorLLM = LoggingLLMClient(wrapping: baseExtractorLLM, stage: "extractor", writer: writer)
             #else
-                extractorLLM = memoryLLM
-                analyzerLLM = memoryLLM
+                extractorLLM = baseExtractorLLM
             #endif
             let extractor = ContextExtractor(llm: extractorLLM)
-            let analyzer = AnalysisRunner(llm: analyzerLLM)
+
+            let analyzerBackend: MemoryBackend
+            switch args.analyzerBackend {
+            case .afm:
+                analyzerBackend = .appleIntelligence
+            case .anthropic:
+                analyzerBackend = .anthropic(apiKey: apiKey)
+            }
+            let analyzer = AnalysisRunner(backend: analyzerBackend)
 
             let middleware = MemoryMiddleware(
                 store: store,

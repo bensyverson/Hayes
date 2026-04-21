@@ -9,17 +9,17 @@ struct MemoryMiddlewareTests {
         store: GraphStore,
         embeddings: any EmbeddingProvider,
         extractor: [String],
-        analyzer: [String]
-    ) -> (MemoryMiddleware, extractor: MockLLM, analyzer: MockLLM) {
+        analyzer: [AnalysisResult]
+    ) -> (MemoryMiddleware, extractor: MockLLM, analyzer: MockAnalyzer) {
         let extractorLLM = MockLLM(responses: extractor)
-        let analyzerLLM = MockLLM(responses: analyzer)
+        let mockAnalyzer = MockAnalyzer(results: analyzer)
         let middleware = MemoryMiddleware(
             store: store,
             embeddings: embeddings,
             extractor: ContextExtractor(llm: extractorLLM),
-            analyzer: AnalysisRunner(llm: analyzerLLM)
+            analyzer: mockAnalyzer
         )
-        return (middleware, extractorLLM, analyzerLLM)
+        return (middleware, extractorLLM, mockAnalyzer)
     }
 
     /// Drains exactly `count` events from the middleware's stream.
@@ -95,11 +95,9 @@ struct MemoryMiddlewareTests {
             store: store,
             embeddings: embeddings,
             extractor: ["[\"spa website\"]"],
-            analyzer: ["""
-            {"lessons": [
-              {"seed": "spa website", "behavior": "warm gold palette", "sentiment": 1.0, "source": "user"}
-            ]}
-            """]
+            analyzer: [AnalysisResult(lessons: [
+                Lesson(seed: "spa website", behavior: "warm gold palette", sentiment: 1.0, source: .user),
+            ])]
         )
 
         var req = FakeTurn.request(messages: [FakeTurn.userMessage("design a spa site")])
@@ -121,11 +119,9 @@ struct MemoryMiddlewareTests {
             store: store,
             embeddings: embeddings,
             extractor: ["[\"x\"]"],
-            analyzer: ["""
-            {"lessons": [
-              {"seed": "spa website", "behavior": "warm gold palette", "sentiment": 1.0, "source": "self_assessment"}
-            ]}
-            """]
+            analyzer: [AnalysisResult(lessons: [
+                Lesson(seed: "spa website", behavior: "warm gold palette", sentiment: 1.0, source: .selfAssessment),
+            ])]
         )
 
         var req = FakeTurn.request(messages: [FakeTurn.userMessage("update")])
@@ -147,11 +143,9 @@ struct MemoryMiddlewareTests {
             store: store,
             embeddings: embeddings,
             extractor: ["[\"x\"]"],
-            analyzer: ["""
-            {"lessons": [
-              {"seed": "electrolyte drink website", "behavior": "Arial body copy", "sentiment": -0.8, "source": "user"}
-            ]}
-            """]
+            analyzer: [AnalysisResult(lessons: [
+                Lesson(seed: "electrolyte drink website", behavior: "Arial body copy", sentiment: -0.8, source: .user),
+            ])]
         )
 
         var req = FakeTurn.request(messages: [FakeTurn.userMessage("update")])
@@ -175,12 +169,10 @@ struct MemoryMiddlewareTests {
             store: store,
             embeddings: embeddings,
             extractor: ["[\"x\"]"],
-            analyzer: ["""
-            {"lessons": [
-              {"seed": "drink site", "behavior": "bold glow headline", "sentiment": 0.6, "source": "user"},
-              {"seed": "drink site", "behavior": "Arial body copy", "sentiment": -0.8, "source": "user"}
-            ]}
-            """]
+            analyzer: [AnalysisResult(lessons: [
+                Lesson(seed: "drink site", behavior: "bold glow headline", sentiment: 0.6, source: .user),
+                Lesson(seed: "drink site", behavior: "Arial body copy", sentiment: -0.8, source: .user),
+            ])]
         )
 
         var req = FakeTurn.request(messages: [FakeTurn.userMessage("update")])
@@ -205,7 +197,7 @@ struct MemoryMiddlewareTests {
             store: store,
             embeddings: embeddings,
             extractor: ["[\"x\"]"],
-            analyzer: ["{\"lessons\": []}"]
+            analyzer: [AnalysisResult(lessons: [])]
         )
 
         var req = FakeTurn.request(messages: [FakeTurn.userMessage("hi")])
@@ -234,11 +226,9 @@ struct MemoryMiddlewareTests {
             store: store,
             embeddings: embeddings,
             extractor: ["[\"x\"]"],
-            analyzer: ["""
-            {"lessons": [
-              {"seed": "spa website", "behavior": "warm gold palette", "sentiment": 1.0, "source": "user"}
-            ]}
-            """]
+            analyzer: [AnalysisResult(lessons: [
+                Lesson(seed: "spa website", behavior: "warm gold palette", sentiment: 1.0, source: .user),
+            ])]
         )
 
         var req = FakeTurn.request(messages: [FakeTurn.userMessage("update")])
@@ -266,11 +256,9 @@ struct MemoryMiddlewareTests {
             store: store,
             embeddings: embeddings,
             extractor: ["[\"x\"]"],
-            analyzer: ["""
-            {"lessons": [
-              {"seed": "drink site", "behavior": "Arial body copy", "sentiment": -0.8, "source": "user"}
-            ]}
-            """]
+            analyzer: [AnalysisResult(lessons: [
+                Lesson(seed: "drink site", behavior: "Arial body copy", sentiment: -0.8, source: .user),
+            ])]
         )
 
         var req = FakeTurn.request(messages: [FakeTurn.userMessage("update")])
@@ -295,12 +283,10 @@ struct MemoryMiddlewareTests {
             store: store,
             embeddings: embeddings,
             extractor: ["[\"x\"]"],
-            analyzer: ["""
-            {"lessons": [
-              {"seed": "drink site", "behavior": "bold glow headline", "sentiment": 0.6, "source": "user"},
-              {"seed": "drink site", "behavior": "Arial body copy", "sentiment": -0.8, "source": "user"}
-            ]}
-            """]
+            analyzer: [AnalysisResult(lessons: [
+                Lesson(seed: "drink site", behavior: "bold glow headline", sentiment: 0.6, source: .user),
+                Lesson(seed: "drink site", behavior: "Arial body copy", sentiment: -0.8, source: .user),
+            ])]
         )
 
         var req = FakeTurn.request(messages: [FakeTurn.userMessage("update")])

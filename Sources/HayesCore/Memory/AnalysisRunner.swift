@@ -1,34 +1,44 @@
 import Foundation
 import Operator
 
-/// Turns a completed agent run into a list of ``Lesson``s — each
-/// pairing a seed (the kind of work) with a behavior (a specific
-/// choice) and a signed sentiment. A single LLM call emits the list as
-/// JSON. See ``MemoryPrompts/analysis`` for the prompt.
+/// Turns a completed agent run into a list of ``Lesson``s — each pairing
+/// a seed (the kind of work) with a behavior (a specific choice) and a
+/// signed sentiment.
+///
+/// Runs a short ``Operator/Operative`` configured with a single
+/// `submit_analysis` tool whose typed arguments (``AnalysisInput``)
+/// serve as the analyzer's output channel. Anthropic enforces the shape
+/// via its tool-use schema; Apple Intelligence enforces it via
+/// `@Generable` guided generation. Either way, the `Lesson.Source` enum
+/// cases are structurally constrained and free-form JSON drift is
+/// impossible.
 public struct AnalysisRunner: Sendable {
-    private let llm: any LLMClient
+    private let backend: MemoryBackend
 
-    /// Raised when the analysis response cannot be parsed.
-    public struct InvalidJSON: Error, Sendable, LocalizedError {
-        /// The raw response text that failed to parse.
-        public let response: String
-        /// Creates a new error.
-        public init(response: String) {
-            self.response = response
-        }
+    /// Raised when the analyzer run cannot produce a result.
+    public enum AnalysisError: Error, Sendable, LocalizedError {
+        /// The Operative finished without calling `submit_analysis`.
+        /// Carries the model's final text (if any) so debugging is
+        /// possible without a separate logging layer.
+        case toolNotCalled(finalText: String?)
+        /// The underlying Operative run failed.
+        case operativeFailed(any Error)
 
         public var errorDescription: String? {
-            let snippet = response
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .prefix(280)
-            return "Analysis LLM returned non-conforming JSON: \(snippet)"
+            switch self {
+            case let .toolNotCalled(finalText):
+                let said = finalText.map { ": \"\($0.prefix(200))\"" } ?? ""
+                return "Analyzer completed its run without calling submit_analysis\(said)."
+            case let .operativeFailed(underlying):
+                return "Analyzer operative failed: \(underlying)"
+            }
         }
     }
 
     /// Creates a new runner.
-    /// - Parameter llm: The LLM client used for the analysis call.
-    public init(llm: any LLMClient) {
-        self.llm = llm
+    /// - Parameter backend: The LLM backend powering the analyzer.
+    public init(backend: MemoryBackend) {
+        self.backend = backend
     }
 
     /// Runs analysis over a completed turn.
@@ -36,30 +46,61 @@ public struct AnalysisRunner: Sendable {
     /// `messages` is the conversation slice the analyzer should reason
     /// over — typically the current run's messages starting from the
     /// most recent genuine user turn (see
-    /// ``MemoryMiddleware/lastTurnMessages(_:)``). Image / PDF / audio
-    /// / video `ContentPart`s are redacted to short placeholders before
-    /// the payload is encoded so large tool-result attachments (e.g.
-    /// rendered canvas images) don't blow up the prompt.
+    /// ``MemoryMiddleware/lastTurnMessages(_:)``). Image / PDF / audio /
+    /// video `ContentPart`s are redacted to short placeholders before the
+    /// payload is encoded so large tool-result attachments (e.g. rendered
+    /// canvas images) don't blow up the prompt.
     ///
     /// - Parameters:
     ///   - messages: The conversation slice to analyse.
     ///   - thinking: The agent's concatenated thinking trace across the
     ///     run. Empty string if the run produced none.
     /// - Returns: A parsed ``AnalysisResult``.
-    /// - Throws: ``InvalidJSON`` if the response can't be decoded.
+    /// - Throws: ``AnalysisError/toolNotCalled`` if the model completed
+    ///   without calling the tool; ``AnalysisError/operativeFailed(_:)``
+    ///   if the Operative loop threw.
     public func analyze(
         messages: [Operator.Message],
         thinking: String
     ) async throws -> AnalysisResult {
-        let payload = AnalysisRunner.formatPayload(
-            messages: messages,
-            thinking: thinking
-        )
-        let raw = try await llm.complete(
-            systemPrompt: MemoryPrompts.analysis,
-            userMessage: payload
-        )
-        return try AnalysisRunner.parse(raw)
+        let box = AnalysisResultBox()
+        let operative = try makeOperative(box: box)
+        let payload = AnalysisRunner.formatPayload(messages: messages, thinking: thinking)
+
+        let operativeResult: OperativeResult
+        do {
+            operativeResult = try await operative.run(payload).result()
+        } catch {
+            throw AnalysisError.operativeFailed(error)
+        }
+
+        guard let result = await box.result else {
+            throw AnalysisError.toolNotCalled(finalText: operativeResult.text)
+        }
+        return result
+    }
+
+    private func makeOperative(box: AnalysisResultBox) throws -> Operative {
+        let submit = SubmitAnalysis(box: box)
+        switch backend {
+        case .appleIntelligence:
+            return try Operative(
+                name: "Hayes Analyzer",
+                description: "Distills lessons from a completed agent turn.",
+                systemPrompt: MemoryPrompts.analysis,
+                tools: [submit],
+                budget: Budget(maxTurns: 2)
+            )
+        case let .anthropic(apiKey):
+            return try Operative(
+                name: "Hayes Analyzer",
+                description: "Distills lessons from a completed agent turn.",
+                provider: .anthropic(apiKey: apiKey),
+                systemPrompt: MemoryPrompts.analysis,
+                tools: [submit],
+                budget: Budget(maxTurns: 2)
+            )
+        }
     }
 
     static func formatPayload(
@@ -161,17 +202,5 @@ public struct AnalysisRunner: Sendable {
             return "[]"
         }
         return json
-    }
-
-    static func parse(_ raw: String) throws -> AnalysisResult {
-        let stripped = stripJSONFences(raw)
-        guard let data = stripped.data(using: .utf8) else {
-            throw InvalidJSON(response: raw)
-        }
-        do {
-            return try JSONDecoder().decode(AnalysisResult.self, from: data)
-        } catch {
-            throw InvalidJSON(response: raw)
-        }
     }
 }
