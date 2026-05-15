@@ -1,6 +1,6 @@
 import Operator
 
-/// An ``Operable`` that exposes a single `submit_analysis` tool.
+/// An `Operable` that exposes a single `submit_analysis` tool.
 ///
 /// Drives the tool-calling path for ``AnalysisRunner``. The Operative
 /// loop dispatches the tool; its handler deposits the typed

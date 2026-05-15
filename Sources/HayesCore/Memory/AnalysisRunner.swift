@@ -5,7 +5,7 @@ import Operator
 /// a seed (the kind of work) with a behavior (a specific choice) and a
 /// signed sentiment.
 ///
-/// Runs a short ``Operator/Operative`` configured with a single
+/// Runs a short `Operator.Operative` configured with a single
 /// `submit_analysis` tool whose typed arguments (``AnalysisInput``)
 /// serve as the analyzer's output channel. Anthropic enforces the shape
 /// via its tool-use schema; Apple Intelligence enforces it via
@@ -40,7 +40,7 @@ public struct AnalysisRunner: Sendable {
     /// - Parameters:
     ///   - backend: The LLM backend powering the analyzer.
     ///   - model: Optional explicit model identifier. Used only when
-    ///     ``backend`` is ``MemoryBackend/anthropic(apiKey:)`` — AFM
+    ///     `backend` is ``MemoryBackend/anthropic(apiKey:)`` — AFM
     ///     has no model selection. `nil` lets the provider pick its
     ///     default.
     public init(backend: MemoryBackend, model: String? = nil) {
@@ -53,7 +53,7 @@ public struct AnalysisRunner: Sendable {
     /// `messages` is the conversation slice the analyzer should reason
     /// over — typically the current run's messages starting from the
     /// most recent genuine user turn (see
-    /// ``MemoryMiddleware/lastTurnMessages(_:)``). Image / PDF / audio /
+    /// `MemoryMiddleware.lastTurnMessages`). Image / PDF / audio /
     /// video `ContentPart`s are redacted to short placeholders before the
     /// payload is encoded so large tool-result attachments (e.g. rendered
     /// canvas images) don't blow up the prompt.
@@ -63,9 +63,9 @@ public struct AnalysisRunner: Sendable {
     ///   - thinking: The agent's concatenated thinking trace across the
     ///     run. Empty string if the run produced none.
     /// - Returns: A parsed ``AnalysisResult``.
-    /// - Throws: ``AnalysisError/toolNotCalled`` if the model completed
-    ///   without calling the tool; ``AnalysisError/operativeFailed(_:)``
-    ///   if the Operative loop threw.
+    /// - Throws: ``AnalysisError/toolNotCalled(finalText:)`` if the model
+    ///   completed without calling the tool;
+    ///   ``AnalysisError/operativeFailed(_:)`` if the Operative loop threw.
     public func analyze(
         messages: [Operator.Message],
         thinking: String

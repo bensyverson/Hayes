@@ -16,7 +16,7 @@ import Operator
 ///     → ["landing page design", "wellness brand",
 ///        "calm minimal aesthetic", "small business website"]
 ///
-/// The method is called ``extract(recentMessages:)`` because the type name is
+/// The method is called ``extract(recentMessages:priorPhrases:)`` because the type name is
 /// fixed by the implementation plan, but the operation is inference /
 /// enrichment, not literal extraction from the input.
 public struct ContextExtractor: Sendable {

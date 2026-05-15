@@ -11,10 +11,10 @@ See `./project/2026-04-18-prototype.md` for the initial seed of an idea.
 When you need additional context, consult the docs:
 
 - [README.md](README.md) - Project overview and quick start
-- **DocC catalog** (`Sources/RapidPro/Documentation.docc/`) - API documentation and articles:
+- **DocC catalog** (`Sources/HayesCore/Documentation.docc/`) - API documentation and articles
 - `./project/` - Design documents and implementation plans
 
-Generate documentation: `swift package generate-documentation --target Hayes`. Ensure any new or updated code keeps our DocC annotations up to date with 100% coverage.
+Generate documentation: `swift package generate-documentation --target HayesCore`. Ensure any new or updated code keeps our DocC annotations up to date with 100% coverage.
 
 ## General
 

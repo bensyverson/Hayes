@@ -54,3 +54,7 @@ middleware and CLI layer above it depend on:
 - ``OperatorLLMClient``
 - ``MemoryPrompts``
 - <doc:MemoryPipeline>
+
+### CLI integration
+
+- <doc:UsingHayesAsACLIHook>
