@@ -30,18 +30,73 @@ the way users expect.
 
 ## Wiring `hayes recall` into `UserPromptSubmit`
 
-Claude Code passes the transcript path and session UUID to hooks as
-environment variables. The minimal hook is one line:
+Claude Code passes hook data as a JSON document on the hook's
+**stdin** — *not* as environment variables. For `UserPromptSubmit` the
+shape is:
 
-```bash
-hayes recall "$TRANSCRIPT_PATH" --session-id "$SESSION_ID"
+```json
+{
+  "session_id": "abc123",
+  "transcript_path": "/path/to/transcript.jsonl",
+  "cwd": "/current/directory",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "User's prompt text"
+}
 ```
 
-The hook's stdout is appended to the user's prompt as Hayes-surfaced
-context. The `--session-id` argument is redundant for Claude Code (the
-transcript filename stem already *is* the session UUID), but stating it
-explicitly makes the contract obvious and survives a harness that names
-its transcripts differently.
+The output contract is the inverse: the hook should print a JSON
+document to stdout, and Claude Code injects the value of
+`hookSpecificOutput.additionalContext` into the prompt as recalled
+context. That's the only documented injection path — relying on
+"plain stdout gets appended" is undocumented, version-dependent
+behaviour and should be avoided in production hooks.
+
+A minimal `UserPromptSubmit` hook script that ties Hayes's framed
+plaintext to the documented JSON envelope:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+payload=$(cat)
+transcript=$(jq -r '.transcript_path' <<<"$payload")
+session=$(jq -r '.session_id'      <<<"$payload")
+
+context=$(hayes recall "$transcript" --session-id "$session")
+
+jq -n --arg ctx "$context" '{
+  hookSpecificOutput: {
+    hookEventName: "UserPromptSubmit",
+    additionalContext: $ctx
+  }
+}'
+```
+
+`--session-id` is redundant for Claude Code (the transcript filename
+stem already *is* the session UUID) but passing it makes the contract
+explicit and survives a harness that names its transcripts differently.
+
+Register the script under the `UserPromptSubmit` event in your
+`settings.json` (or a plugin's `hooks/hooks.json`):
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "/abs/path/to/hayes-recall-hook.sh" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+> The `matcher` field's behaviour for session-level events
+> (`UserPromptSubmit`, `Stop`) is not explicitly documented as of this
+> writing; `"*"` is the safe default.
 
 ### Tunables on the hot path
 
@@ -62,24 +117,66 @@ its transcripts differently.
 
 ## Wiring `hayes assess` into `Stop` (or cron)
 
-A `Stop` hook fires once when the agent's turn ends. The minimal
-invocation is:
+`Stop` fires once when the agent finishes responding. Its stdin payload
+is the same common-fields shape as `UserPromptSubmit`, minus the
+`prompt`:
 
-```bash
-hayes assess "$TRANSCRIPT_PATH"
+```json
+{
+  "session_id": "abc123",
+  "transcript_path": "/path/to/transcript.jsonl",
+  "cwd": "/current/directory",
+  "permission_mode": "default",
+  "hook_event_name": "Stop"
+}
 ```
 
-Same identity convention: the transcript filename stem is the session
-UUID, so the edges written here will line up with the injections
-recorded by `hayes recall`. To batch-process an archive instead, drop
-the hook and run from cron:
+`Stop` has no documented output contract for prompt injection — it just
+needs to run. A minimal hook script:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+payload=$(cat)
+transcript=$(jq -r '.transcript_path' <<<"$payload")
+hayes assess "$transcript"
+```
+
+Same identity convention as `recall`: the transcript filename stem is
+the session UUID, so the edges written here line up with the
+injections recorded by the live hook. Register it the same way:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "/abs/path/to/hayes-assess-hook.sh", "timeout": 600 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+> `Stop` defaults to a 600-second timeout (much longer than
+> `UserPromptSubmit`'s 30 s), so a multi-turn `assess` typically
+> finishes in time. Blocking-semantics and retry behaviour for `Stop`
+> are not documented — treat it as best-effort and don't depend on it
+> for irrecoverable state.
+
+To batch-process an archive instead, drop the hook and run from cron:
 
 ```bash
 hayes assess ~/.claude/projects/*/conversation-*.jsonl
 ```
 
 The shell expands the glob; `hayes assess` processes each transcript in
-turn and prints a per-file lesson count followed by a total.
+turn and prints a per-file lesson count followed by a total. The cron
+path is the more reliable of the two — use it if you can't tolerate
+occasional missed sessions.
 
 ### AFM vs Anthropic for the analyzer
 

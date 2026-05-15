@@ -57,17 +57,10 @@ full flag surface.
 
 See the "Using Hayes as a CLI hook" article in the HayesCore DocC
 catalog (`Sources/HayesCore/Documentation.docc/Articles/UsingHayesAsACLIHook.md`)
-for the hook contracts, the AFM-vs-Anthropic backend tradeoffs, and
-the `--context-extractor none` recipe for CI / batch imports. The
-short version:
-
-```bash
-# UserPromptSubmit hook
-hayes recall "$TRANSCRIPT_PATH" --session-id "$SESSION_ID"
-
-# Stop hook (or nightly cron)
-hayes assess "$TRANSCRIPT_PATH"
-```
+for the hook contracts, including the JSON-on-stdin payload shape, the
+documented `hookSpecificOutput.additionalContext` output envelope, the
+AFM-vs-Anthropic backend tradeoffs, and the `--context-extractor none`
+recipe for CI / batch imports.
 
 Both commands default their identity to the transcript filename stem,
 which for Claude Code is the harness-native session UUID — so the live

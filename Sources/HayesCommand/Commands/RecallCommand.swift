@@ -8,7 +8,9 @@ import Operator
 /// Loads a transcript, runs ``HayesCore/RecallService`` against the
 /// graph store, and emits surfaced (seed, behavior) pairs to stdout for
 /// consumption by a harness hook (e.g. Claude Code's
-/// `UserPromptSubmit`). One pair per line by default; pass `--json` for a
+/// `UserPromptSubmit`). Plaintext output is framed under a
+/// `[Memories:]` block so the agent reads it as recalled context
+/// rather than as part of the user's prompt; pass `--json` for a
 /// machine-readable payload.
 struct RecallCommand: AsyncParsableCommand {
     static let configuration: CommandConfiguration = .init(
@@ -60,7 +62,7 @@ struct RecallCommand: AsyncParsableCommand {
     var storeInjection: Bool = true
 
     /// Emit JSON instead of plaintext.
-    @Flag(name: .long, help: "Emit JSON instead of one pair per line.")
+    @Flag(name: .long, help: "Emit JSON instead of the framed plaintext block.")
     var json: Bool = false
 
     /// Anthropic API key for the context-extractor when
@@ -124,17 +126,29 @@ struct RecallCommand: AsyncParsableCommand {
         )
     }
 
-    /// Plaintext renderer: one `seedText → behaviorText` line per
-    /// surfaced pair; under `--dry-run`, also a `(skipped:reason)`
-    /// section for retrieved-but-filtered pairs.
+    /// Plaintext renderer.
+    ///
+    /// Surfaced pairs are framed under a `[Memories:]` block so that
+    /// when the output is appended verbatim to a user prompt (as
+    /// `UserPromptSubmit` does), the agent reads them as recalled
+    /// context rather than as part of the user's request. Each block
+    /// is preceded by a blank-line separator. Under `--dry-run`, a
+    /// second `[Skipped:]` block lists retrieved-but-filtered pairs
+    /// with their reason. An entirely empty result renders as `""`.
     static func renderPlaintext(_ result: RecallResult, dryRun: Bool) -> String {
-        var lines: [String] = result.surfaced.map { "\($0.seedText) → \($0.behaviorText)" }
-        if dryRun {
-            for skipped in result.skipped {
-                lines.append("(skipped:\(skipped.reason.rawValue)) \(skipped.seedText) → \(skipped.behaviorText)")
-            }
+        var blocks: [String] = []
+        if !result.surfaced.isEmpty {
+            let lines = result.surfaced.map { "- \($0.seedText) → \($0.behaviorText)" }
+            blocks.append("[Memories:]\n" + lines.joined(separator: "\n"))
         }
-        return lines.joined(separator: "\n")
+        if dryRun, !result.skipped.isEmpty {
+            let lines = result.skipped.map {
+                "- \($0.seedText) → \($0.behaviorText) (\($0.reason.rawValue))"
+            }
+            blocks.append("[Skipped:]\n" + lines.joined(separator: "\n"))
+        }
+        guard !blocks.isEmpty else { return "" }
+        return "\n\n" + blocks.joined(separator: "\n\n")
     }
 
     /// JSON renderer.

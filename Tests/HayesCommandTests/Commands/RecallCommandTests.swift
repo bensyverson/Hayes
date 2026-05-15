@@ -96,7 +96,7 @@ struct RecallCommandHelpersTests {
         #expect(options.storeInjection == false)
     }
 
-    @Test("renderPlaintext emits one tab-separated pair per surfaced row")
+    @Test("renderPlaintext frames surfaced pairs under a [Memories:] block")
     func renderPlaintext() {
         let result = RecallResult(
             phrases: ["query phrase"],
@@ -107,13 +107,24 @@ struct RecallCommandHelpersTests {
                     behaviorID: "b1", behaviorText: "use calm minimal palette",
                     edgeWeight: 0.71
                 ),
+                .init(
+                    seedID: "s2", seedText: "landing page design",
+                    seedSimilarity: 0.74,
+                    behaviorID: "b2", behaviorText: "use serif headlines",
+                    edgeWeight: 0.63
+                ),
             ],
             skipped: []
         )
         let text = RecallCommand.renderPlaintext(result, dryRun: false)
-        // Each surfaced pair appears as a single line: seedText → behaviorText
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        #expect(lines.contains("wellness brand → use calm minimal palette"))
+        let expected = """
+
+
+        [Memories:]
+        - wellness brand → use calm minimal palette
+        - landing page design → use serif headlines
+        """
+        #expect(text == expected)
     }
 
     @Test("renderPlaintext emits empty string when nothing surfaced and not dry-run")
@@ -123,7 +134,7 @@ struct RecallCommandHelpersTests {
         #expect(text.isEmpty)
     }
 
-    @Test("renderPlaintext under --dry-run lists skipped pairs with reasons")
+    @Test("renderPlaintext under --dry-run lists skipped pairs under a [Skipped:] block")
     func renderPlaintextDryRun() {
         let result = RecallResult(
             phrases: ["query phrase"],
@@ -137,8 +148,46 @@ struct RecallCommandHelpersTests {
             ]
         )
         let text = RecallCommand.renderPlaintext(result, dryRun: true)
-        #expect(text.contains("wellness brand → use calm minimal palette"))
-        #expect(text.contains("alreadyInjectedThisSession"))
+        let expected = """
+
+
+        [Skipped:]
+        - wellness brand → use calm minimal palette (alreadyInjectedThisSession)
+        """
+        #expect(text == expected)
+    }
+
+    @Test("renderPlaintext under --dry-run with both surfaced and skipped renders both blocks")
+    func renderPlaintextDryRunMixed() {
+        let result = RecallResult(
+            phrases: ["query phrase"],
+            surfaced: [
+                .init(
+                    seedID: "s1", seedText: "wellness brand",
+                    seedSimilarity: 0.82,
+                    behaviorID: "b1", behaviorText: "use calm minimal palette",
+                    edgeWeight: 0.71
+                ),
+            ],
+            skipped: [
+                .init(
+                    seedID: "s2", seedText: "landing page design",
+                    behaviorID: "b2", behaviorText: "use serif headlines",
+                    reason: .alreadyInjectedThisSession
+                ),
+            ]
+        )
+        let text = RecallCommand.renderPlaintext(result, dryRun: true)
+        let expected = """
+
+
+        [Memories:]
+        - wellness brand → use calm minimal palette
+
+        [Skipped:]
+        - landing page design → use serif headlines (alreadyInjectedThisSession)
+        """
+        #expect(text == expected)
     }
 
     @Test("renderJSON returns a JSON object with phrases, surfaced, skipped")
