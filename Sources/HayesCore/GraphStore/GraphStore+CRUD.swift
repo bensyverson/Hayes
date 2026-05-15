@@ -48,16 +48,34 @@ public extension GraphStore {
     ///   - sourceID: The source node identifier.
     ///   - targetID: The target node identifier.
     ///   - weight: The edge weight (will be clamped).
+    ///   - provenance: Optional provenance metadata. When `nil`, the
+    ///     three provenance columns are stored as NULL.
     /// - Returns: The inserted ``Edge``.
-    func insertEdge(sourceID: String, targetID: String, weight: Double) throws -> Edge {
+    func insertEdge(
+        sourceID: String,
+        targetID: String,
+        weight: Double,
+        provenance: EdgeProvenance? = nil
+    ) throws -> Edge {
         let clamped = weight.clampedToUnit
         let now = Date()
         try database.write { db in
             try db.execute(
                 sql: """
-                INSERT INTO edges (source_id, target_id, weight, updated_at) VALUES (?, ?, ?, ?)
+                INSERT INTO edges
+                    (source_id, target_id, weight, updated_at,
+                     source_transcript, turn_index, source_excerpt)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                arguments: [sourceID, targetID, clamped, now.timeIntervalSince1970]
+                arguments: [
+                    sourceID,
+                    targetID,
+                    clamped,
+                    now.timeIntervalSince1970,
+                    provenance?.sourceTranscript,
+                    provenance?.turnIndex,
+                    provenance?.sourceExcerpt,
+                ]
             )
         }
         return Edge(sourceID: sourceID, targetID: targetID, weight: clamped, updatedAt: now)
@@ -68,16 +86,43 @@ public extension GraphStore {
     ///   - sourceID: The source node identifier.
     ///   - targetID: The target node identifier.
     ///   - weight: The new weight (will be clamped).
-    func updateEdgeWeight(sourceID: String, targetID: String, weight: Double) throws {
+    ///   - provenance: Optional new provenance. When `nil`, the row's
+    ///     existing provenance columns are left untouched.
+    func updateEdgeWeight(
+        sourceID: String,
+        targetID: String,
+        weight: Double,
+        provenance: EdgeProvenance? = nil
+    ) throws {
         let clamped = weight.clampedToUnit
         let now = Date().timeIntervalSince1970
         try database.write { db in
-            try db.execute(
-                sql: """
-                UPDATE edges SET weight = ?, updated_at = ? WHERE source_id = ? AND target_id = ?
-                """,
-                arguments: [clamped, now, sourceID, targetID]
-            )
+            if let provenance {
+                try db.execute(
+                    sql: """
+                    UPDATE edges
+                    SET weight = ?, updated_at = ?,
+                        source_transcript = ?, turn_index = ?, source_excerpt = ?
+                    WHERE source_id = ? AND target_id = ?
+                    """,
+                    arguments: [
+                        clamped,
+                        now,
+                        provenance.sourceTranscript,
+                        provenance.turnIndex,
+                        provenance.sourceExcerpt,
+                        sourceID,
+                        targetID,
+                    ]
+                )
+            } else {
+                try db.execute(
+                    sql: """
+                    UPDATE edges SET weight = ?, updated_at = ? WHERE source_id = ? AND target_id = ?
+                    """,
+                    arguments: [clamped, now, sourceID, targetID]
+                )
+            }
             if db.changesCount == 0 {
                 throw GraphStore.Error.edgeNotFound(sourceID: sourceID, targetID: targetID)
             }

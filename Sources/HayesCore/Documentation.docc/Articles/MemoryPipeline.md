@@ -28,7 +28,7 @@ as an `Operator.Middleware` conformer, ``MemoryMiddleware``:
    - embeds the seed and behavior, finds-or-creates each node via cosine
      dedupe against the existing graph (``RetrievalConfig/dedupThreshold``);
    - calls
-     ``GraphStore/reinforceEdge(seedID:behaviorID:sentiment:sourceScale:config:)``
+     ``GraphStore/reinforceEdge(seedID:behaviorID:sentiment:sourceScale:config:provenance:)``
      with the matching trust scale —
      ``RetrievalConfig/userFeedbackScale`` (1.0) for user-sourced lessons,
      ``RetrievalConfig/selfAssessmentScale`` (0.3) for self-assessment.

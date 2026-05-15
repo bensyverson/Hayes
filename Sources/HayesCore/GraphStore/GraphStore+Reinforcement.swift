@@ -26,12 +26,17 @@ public extension GraphStore {
     ///     self-assessment = `0.3`).
     ///   - config: The retrieval configuration providing
     ///     ``RetrievalConfig/feedbackRate``.
+    ///   - provenance: Optional provenance for this update. On the
+    ///     insert path the values are written verbatim. On the update
+    ///     path a non-`nil` value overwrites the existing provenance —
+    ///     the most recent contributing turn wins.
     func reinforceEdge(
         seedID: String,
         behaviorID: String,
         sentiment: Double,
         sourceScale: Double,
-        config: RetrievalConfig = .default
+        config: RetrievalConfig = .default,
+        provenance: EdgeProvenance? = nil
     ) throws {
         guard sentiment != 0 else { return }
 
@@ -43,9 +48,19 @@ public extension GraphStore {
         let updated = (current + alpha * (target - current)).clampedToUnit
 
         if existing != nil {
-            try updateEdgeWeight(sourceID: seedID, targetID: behaviorID, weight: updated)
+            try updateEdgeWeight(
+                sourceID: seedID,
+                targetID: behaviorID,
+                weight: updated,
+                provenance: provenance
+            )
         } else {
-            _ = try insertEdge(sourceID: seedID, targetID: behaviorID, weight: updated)
+            _ = try insertEdge(
+                sourceID: seedID,
+                targetID: behaviorID,
+                weight: updated,
+                provenance: provenance
+            )
         }
     }
 }

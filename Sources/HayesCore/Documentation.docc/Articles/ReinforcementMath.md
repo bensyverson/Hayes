@@ -7,7 +7,7 @@ How edge weights move in response to feedback.
 Reinforcement applies a user- or self-attributed sentiment to a single
 directed edge between a seed node and a behavior node. Each ``Lesson``
 the analyzer emits produces exactly one
-``GraphStore/reinforceEdge(seedID:behaviorID:sentiment:sourceScale:config:)``
+``GraphStore/reinforceEdge(seedID:behaviorID:sentiment:sourceScale:config:provenance:)``
 call. Edges may be reinforced repeatedly over time; each call applies the
 update and leaves the edge open to further feedback.
 
