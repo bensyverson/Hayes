@@ -1,18 +1,18 @@
 import ArgumentParser
 
-/// Command-line arguments for `hayes chat`.
+/// Shared `--db`, `--context-backend`, and `--analyzer-backend` flags
+/// embedded by every `hayes` subcommand.
 ///
-/// Uses `ParsableArguments` (not `ParsableCommand`) so the `@main` entry
-/// point remains the TextUI ``HayesChatApp`` conformance. Resolved via
-/// `ChatArguments.parseOrExit()` inside ``HayesChatApp/init()``.
-struct ChatArguments: ParsableArguments {
+/// `ParsableArguments` (not `ParsableCommand`) so each subcommand
+/// composes the same flag surface without re-declaring the wording.
+struct CommonOptions: ParsableArguments {
     /// SQLite path for the graph store. Defaults to `~/.hayes/graph.sqlite`
     /// when omitted. Leading `~` is expanded against the user's home directory.
     @Option(name: .long, help: "SQLite path for the memory graph. Defaults to ~/.hayes/graph.sqlite.")
     var db: String?
 
     /// Backend for the pre-generation context-extraction stage. Defaults
-    /// to Apple Intelligence — swap back to Anthropic for A/B comparison.
+    /// to Apple Intelligence — swap to Anthropic for A/B comparison.
     @Option(name: .long, help: "LLM backend for the context extractor: afm (default) or anthropic.")
     var contextBackend: MemoryBackendName = .afm
 

@@ -14,9 +14,6 @@ enum HayesPaths {
     /// The default SQLite graph store, `~/.hayes/graph.sqlite`.
     static let defaultDatabase: URL = root.appendingPathComponent("graph.sqlite")
 
-    /// The most recently rendered canvas image, `~/.hayes/canvas.png`.
-    static let canvasImage: URL = root.appendingPathComponent("canvas.png")
-
     /// The JSONL debug log of memory-stage LLM calls,
     /// `~/.hayes/memory.log`. Only written when `DEBUG` is set.
     static let memoryLog: URL = root.appendingPathComponent("memory.log")

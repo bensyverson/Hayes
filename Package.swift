@@ -12,8 +12,6 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../Operator"),
-        .package(path: "../TextUI"),
-        .package(path: "../NativeCanvas"),
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
         .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.3.0"),
@@ -31,8 +29,6 @@ let package = Package(
             dependencies: [
                 "HayesCore",
                 .product(name: "Operator", package: "Operator"),
-                .product(name: "TextUI", package: "TextUI"),
-                .product(name: "NativeCanvas", package: "NativeCanvas"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
