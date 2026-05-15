@@ -136,7 +136,7 @@ public extension GraphStore {
             try Row.fetchAll(
                 db,
                 sql: """
-                SELECT source_id, target_id, weight, updated_at FROM edges
+                SELECT \(GraphStore.edgeColumns) FROM edges
                 WHERE source_id = ? ORDER BY weight DESC
                 """,
                 arguments: [sourceID]
@@ -151,11 +151,47 @@ public extension GraphStore {
             try Row.fetchAll(
                 db,
                 sql: """
-                SELECT source_id, target_id, weight, updated_at FROM edges
+                SELECT \(GraphStore.edgeColumns) FROM edges
                 ORDER BY weight DESC LIMIT ?
                 """,
                 arguments: [limit]
             ).map { GraphStore.makeEdge(row: $0) }
+        }
+    }
+
+    /// Returns the most-recently-reinforced edges (descending by
+    /// `updated_at`), capped at `limit`.
+    /// - Parameter limit: The maximum number of edges to return.
+    func topEdgesByRecency(limit: Int) throws -> [Edge] {
+        try database.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                SELECT \(GraphStore.edgeColumns) FROM edges
+                ORDER BY updated_at DESC LIMIT ?
+                """,
+                arguments: [limit]
+            ).map { GraphStore.makeEdge(row: $0) }
+        }
+    }
+
+    /// Deletes a single edge by source/target. Leaves the endpoint
+    /// nodes intact so they remain available to retrieval and to other
+    /// edges that may reference them.
+    /// - Parameters:
+    ///   - sourceID: The source node identifier.
+    ///   - targetID: The target node identifier.
+    /// - Throws: ``GraphStore/Error/edgeNotFound(sourceID:targetID:)`` when
+    ///   no row matches `(sourceID, targetID)`.
+    func deleteEdge(sourceID: String, targetID: String) throws {
+        try database.write { db in
+            try db.execute(
+                sql: "DELETE FROM edges WHERE source_id = ? AND target_id = ?",
+                arguments: [sourceID, targetID]
+            )
+            if db.changesCount == 0 {
+                throw GraphStore.Error.edgeNotFound(sourceID: sourceID, targetID: targetID)
+            }
         }
     }
 
@@ -168,7 +204,7 @@ public extension GraphStore {
             guard let row = try Row.fetchOne(
                 db,
                 sql: """
-                SELECT source_id, target_id, weight, updated_at FROM edges
+                SELECT \(GraphStore.edgeColumns) FROM edges
                 WHERE source_id = ? AND target_id = ?
                 """,
                 arguments: [sourceID, targetID]
@@ -202,7 +238,7 @@ extension GraphStore {
             return try Row.fetchAll(
                 db,
                 sql: """
-                SELECT source_id, target_id, weight, updated_at FROM edges
+                SELECT \(GraphStore.edgeColumns) FROM edges
                 WHERE source_id IN (\(placeholders))
                 """,
                 arguments: StatementArguments(arguments)
@@ -222,11 +258,32 @@ extension GraphStore {
     }
 
     static func makeEdge(row: Row) -> Edge {
-        Edge(
+        let transcript: String? = row["source_transcript"]
+        let turnIndex: Int? = row["turn_index"]
+        let excerpt: String? = row["source_excerpt"]
+        let provenance: EdgeProvenance? = if transcript != nil || turnIndex != nil || excerpt != nil {
+            EdgeProvenance(
+                sourceTranscript: transcript,
+                turnIndex: turnIndex,
+                sourceExcerpt: excerpt
+            )
+        } else {
+            nil
+        }
+        return Edge(
             sourceID: row["source_id"],
             targetID: row["target_id"],
             weight: row["weight"],
-            updatedAt: Date(timeIntervalSince1970: row["updated_at"])
+            updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
+            provenance: provenance
         )
     }
+
+    /// Comma-separated column list for `SELECT … FROM edges` queries.
+    /// Centralised so adding a column (e.g. provenance) updates every
+    /// read site at once.
+    static let edgeColumns: String = """
+    source_id, target_id, weight, updated_at,
+    source_transcript, turn_index, source_excerpt
+    """
 }

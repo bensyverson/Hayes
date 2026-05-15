@@ -12,7 +12,14 @@ struct Hayes: AsyncParsableCommand {
         commandName: "hayes",
         abstract: "Automatic memory for LLM agents.",
         version: "0.1.0-pre",
-        subcommands: [RecallCommand.self, AssessCommand.self]
+        subcommands: [
+            RecallCommand.self,
+            AssessCommand.self,
+            InspectCommand.self,
+            LsCommand.self,
+            ForgetCommand.self,
+            SessionCommand.self,
+        ]
     )
 
     init() {}

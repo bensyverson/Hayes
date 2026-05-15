@@ -17,7 +17,7 @@ public actor GraphStore {
     private static let maxIDRetries: Int = 5
 
     /// Errors produced by ``GraphStore`` operations.
-    public enum Error: Swift.Error, Sendable {
+    public enum Error: Swift.Error, Sendable, Equatable {
         /// A primary-key collision could not be resolved within the retry budget.
         case idCollisionExhausted
         /// The referenced edge does not exist.

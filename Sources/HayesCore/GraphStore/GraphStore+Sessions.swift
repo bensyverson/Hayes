@@ -77,4 +77,74 @@ public extension GraphStore {
             return Set(rows.map { EdgeKey(sourceID: $0["source_id"], targetID: $0["target_id"]) })
         }
     }
+
+    /// Returns every session in the store, sorted by descending
+    /// `last_seen_at` so the most-recently-active session comes first.
+    /// Each summary carries an `injectionCount` joined from
+    /// `session_injections`.
+    func listSessions() throws -> [SessionSummary] {
+        try database.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                SELECT
+                    s.session_id AS session_id,
+                    s.created_at AS created_at,
+                    s.last_seen_at AS last_seen_at,
+                    COUNT(i.session_id) AS injection_count
+                FROM sessions AS s
+                LEFT JOIN session_injections AS i USING (session_id)
+                GROUP BY s.session_id
+                ORDER BY s.last_seen_at DESC
+                """
+            ).map { row in
+                SessionSummary(
+                    sessionID: row["session_id"],
+                    createdAt: Date(timeIntervalSince1970: row["created_at"]),
+                    lastSeenAt: Date(timeIntervalSince1970: row["last_seen_at"]),
+                    injectionCount: row["injection_count"]
+                )
+            }
+        }
+    }
+
+    /// Returns every injection row for `sessionID`, ordered by
+    /// `injected_at` ascending so the output reads in conversation
+    /// order.
+    /// - Parameter sessionID: The session identifier.
+    func injectionsInSession(_ sessionID: String) throws -> [SessionInjection] {
+        try database.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                SELECT session_id, source_id, target_id, injected_at, matched_text
+                FROM session_injections
+                WHERE session_id = ?
+                ORDER BY injected_at ASC
+                """,
+                arguments: [sessionID]
+            ).map { row in
+                SessionInjection(
+                    sessionID: row["session_id"],
+                    sourceID: row["source_id"],
+                    targetID: row["target_id"],
+                    injectedAt: Date(timeIntervalSince1970: row["injected_at"]),
+                    matchedText: row["matched_text"]
+                )
+            }
+        }
+    }
+
+    /// Deletes every injection row for `sessionID`. Leaves the
+    /// `sessions` row intact so historical first-seen ordering is
+    /// preserved.
+    /// - Parameter sessionID: The session identifier.
+    func resetSession(_ sessionID: String) throws {
+        try database.write { db in
+            try db.execute(
+                sql: "DELETE FROM session_injections WHERE session_id = ?",
+                arguments: [sessionID]
+            )
+        }
+    }
 }

@@ -5,7 +5,7 @@
 /// supply" payload — `hayes assess --no-store-source` can null out
 /// `sourceTranscript` and `sourceExcerpt` while keeping `turnIndex`,
 /// preserving position information without leaking identifying data.
-public struct EdgeProvenance: Hashable, Sendable {
+public struct EdgeProvenance: Friendly {
     /// The harness-native session identifier the lesson was derived
     /// from, when available. `nil` opts out of transcript identity.
     public let sourceTranscript: String?
