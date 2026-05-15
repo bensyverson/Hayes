@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "Sources/**"
+      - "Tests/**"
+      - "Package.swift"
+      - "Package.resolved"
+      - "plugin/**"
+      - "scripts/**"
+      - ".github/workflows/release.yml"
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode (Swift 6.3 toolchain)
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: Print toolchain versions
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Install swiftformat
+        run: brew install swiftformat
+
+      - name: Lint
+        run: swiftformat . --lint
+
+      - name: Run full test suite
+        run: swift test --quiet
+
+      - name: Build release binary into plugin/bin/
+        run: ./scripts/build-plugin.sh
+
+      - name: Smoke-test staged binary
+        run: |
+          ./plugin/bin/hayes --version
+          ./plugin/bin/hayes --help > /dev/null
+
+      - name: Verify hook scripts are executable
+        run: |
+          test -x ./plugin/hooks/recall.sh
+          test -x ./plugin/hooks/assess.sh
+
+      - name: Validate plugin and marketplace manifests are valid JSON
+        run: |
+          jq empty plugin/.claude-plugin/plugin.json
+          jq empty plugin/hooks/hooks.json
+          jq empty .claude-plugin/marketplace.json
+
+      - name: Verify committed binary version matches plugin manifest
+        run: |
+          manifest_version=$(jq -r '.version' plugin/.claude-plugin/plugin.json)
+          binary_version=$(./plugin/bin/hayes --version)
+          if [[ "$manifest_version" != "$binary_version" ]]; then
+            echo "::error::plugin/.claude-plugin/plugin.json version ($manifest_version) does not match binary version ($binary_version)"
+            echo "Did you forget to run ./scripts/release.sh before tagging?"
+            exit 1
+          fi

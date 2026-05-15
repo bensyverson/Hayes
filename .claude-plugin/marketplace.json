@@ -1,0 +1,19 @@
+{
+  "name": "hayes",
+  "description": "Automatic memory for LLM agents — Claude Code plugin distribution.",
+  "owner": {
+    "name": "Ben Syverson",
+    "email": "ben@bensyverson.com"
+  },
+  "plugins": [
+    {
+      "name": "hayes",
+      "source": "./plugin",
+      "description": "Wires `hayes recall` and `hayes assess` into Claude Code's UserPromptSubmit and Stop hooks against a shared SQLite graph.",
+      "homepage": "https://github.com/bensyverson/Hayes",
+      "repository": "https://github.com/bensyverson/Hayes",
+      "license": "MIT",
+      "keywords": ["memory", "hooks", "recall", "agent"]
+    }
+  ]
+}
