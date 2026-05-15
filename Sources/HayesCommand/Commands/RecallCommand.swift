@@ -1,0 +1,158 @@
+import ArgumentParser
+import Foundation
+import HayesCore
+import Operator
+
+/// The `hayes recall` subcommand.
+///
+/// Loads a transcript, runs ``HayesCore/RecallService`` against the
+/// graph store, and emits surfaced (seed, behavior) pairs to stdout for
+/// consumption by a harness hook (e.g. Claude Code's
+/// `UserPromptSubmit`). One pair per line by default; pass `--json` for a
+/// machine-readable payload.
+struct RecallCommand: AsyncParsableCommand {
+    static let configuration: CommandConfiguration = .init(
+        commandName: "recall",
+        abstract: "Surface relevant memory pairs for an in-flight conversation."
+    )
+
+    /// Path to the conversation transcript that grounds this recall pass.
+    /// Format is auto-detected from the file extension.
+    @Argument(help: "Path to the conversation transcript that grounds this recall pass.")
+    var transcript: String
+
+    @OptionGroup var common: CommonOptions
+
+    /// Session identifier used for dedup against `session_injections`.
+    /// Defaults to the transcript filename without its extension — for a
+    /// Claude Code JSONL transcript that's the harness-native session
+    /// UUID.
+    @Option(name: .customLong("session-id"), help: "Session identifier. Defaults to the transcript filename stem.")
+    var sessionID: String?
+
+    /// Backend to use for the optional ``HayesCore/ContextExtractor``
+    /// pre-stage. ``MemoryBackendName/none`` disables the extractor
+    /// entirely; recall then uses the last user message verbatim as the
+    /// retrieval query.
+    @Option(name: .customLong("context-extractor"), help: "LLM for the context-extractor pre-stage: afm (default), anthropic, or none.")
+    var contextExtractor: MemoryBackendName = .afm
+
+    /// Number of trailing transcript messages to consider when forming
+    /// the retrieval window.
+    @Option(name: .long, help: "Trailing transcript messages to consider (default 5).")
+    var window: Int = 5
+
+    /// When set, retrieval runs but no `session_injections` rows are
+    /// written and pairs already injected this session surface as
+    /// skipped pairs with their reason.
+    @Flag(name: .customLong("dry-run"), help: "Explain mode: run retrieval but write nothing; list skipped pairs.")
+    var dryRun: Bool = false
+
+    /// `--no-store-injection` flips the default (`true`) to disable
+    /// injection persistence. Useful for embedded callers that want
+    /// retrieval semantics without the dedup side effect.
+    @Flag(
+        name: .customLong("store-injection"),
+        inversion: .prefixedNo,
+        exclusivity: .exclusive,
+        help: "Persist surfaced pairs to session_injections (default true)."
+    )
+    var storeInjection: Bool = true
+
+    /// Emit JSON instead of plaintext.
+    @Flag(name: .long, help: "Emit JSON instead of one pair per line.")
+    var json: Bool = false
+
+    /// Anthropic API key for the context-extractor when
+    /// ``contextExtractor`` is ``MemoryBackendName/anthropic``. Falls
+    /// back to the `ANTHROPIC_API_KEY` environment variable.
+    @Option(name: .customLong("anthropic-api-key"), help: "Anthropic API key. Falls back to ANTHROPIC_API_KEY.")
+    var anthropicAPIKey: String?
+
+    init() {}
+
+    mutating func run() async throws {
+        let transcriptURL = URL(fileURLWithPath: transcript)
+        let session = sessionID ?? RecallCommand.defaultSessionID(for: transcriptURL)
+
+        let loader = TranscriptLoader()
+        let messages = try await loader.load(path: transcriptURL)
+
+        let dbURL = HayesPaths.resolve(dbArgument: common.db)
+        let store = try GraphStore(path: dbURL)
+        let embeddings = try NLEmbeddingProvider()
+        let extractor = try makeExtractor()
+
+        let service = RecallService(
+            store: store,
+            embeddings: embeddings,
+            extractor: extractor
+        )
+
+        let result = try await service.recall(
+            messages: messages,
+            sessionID: session,
+            options: resolvedOptions()
+        )
+
+        if json {
+            try print(RecallCommand.renderJSON(result))
+        } else {
+            let text = RecallCommand.renderPlaintext(result, dryRun: dryRun)
+            if !text.isEmpty {
+                print(text)
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    /// Returns the transcript filename stem. For Claude Code JSONL
+    /// transcripts that's the harness-native session UUID; for other
+    /// formats it's a stable, conversation-scoped string.
+    static func defaultSessionID(for url: URL) -> String {
+        url.deletingPathExtension().lastPathComponent
+    }
+
+    /// Maps the parsed flag surface to the ``HayesCore/RecallOptions``
+    /// the service expects.
+    func resolvedOptions() -> RecallOptions {
+        RecallOptions(
+            windowSize: window,
+            dryRun: dryRun,
+            storeInjection: storeInjection
+        )
+    }
+
+    /// Plaintext renderer: one `seedText → behaviorText` line per
+    /// surfaced pair; under `--dry-run`, also a `(skipped:reason)`
+    /// section for retrieved-but-filtered pairs.
+    static func renderPlaintext(_ result: RecallResult, dryRun: Bool) -> String {
+        var lines: [String] = result.surfaced.map { "\($0.seedText) → \($0.behaviorText)" }
+        if dryRun {
+            for skipped in result.skipped {
+                lines.append("(skipped:\(skipped.reason.rawValue)) \(skipped.seedText) → \(skipped.behaviorText)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// JSON renderer.
+    static func renderJSON(_ result: RecallResult) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(result)
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private func makeExtractor() throws -> ContextExtractor? {
+        switch contextExtractor {
+        case .none:
+            return nil
+        case .afm, .anthropic:
+            let key = anthropicAPIKey ?? ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]
+            let backend = try contextExtractor.resolveBackend(anthropicAPIKey: key)
+            return ContextExtractor(llm: backend.makeLLMClient())
+        }
+    }
+}

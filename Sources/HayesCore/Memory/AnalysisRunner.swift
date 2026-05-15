@@ -14,6 +14,7 @@ import Operator
 /// impossible.
 public struct AnalysisRunner: Sendable {
     private let backend: MemoryBackend
+    private let model: String?
 
     /// Raised when the analyzer run cannot produce a result.
     public enum AnalysisError: Error, Sendable, LocalizedError {
@@ -36,9 +37,15 @@ public struct AnalysisRunner: Sendable {
     }
 
     /// Creates a new runner.
-    /// - Parameter backend: The LLM backend powering the analyzer.
-    public init(backend: MemoryBackend) {
+    /// - Parameters:
+    ///   - backend: The LLM backend powering the analyzer.
+    ///   - model: Optional explicit model identifier. Used only when
+    ///     ``backend`` is ``MemoryBackend/anthropic(apiKey:)`` — AFM
+    ///     has no model selection. `nil` lets the provider pick its
+    ///     default.
+    public init(backend: MemoryBackend, model: String? = nil) {
         self.backend = backend
+        self.model = model
     }
 
     /// Runs analysis over a completed turn.
@@ -92,13 +99,19 @@ public struct AnalysisRunner: Sendable {
                 budget: Budget(maxTurns: 2)
             )
         case let .anthropic(apiKey):
+            let configuration = if let model {
+                ConversationConfiguration(model: ModelName(rawValue: model))
+            } else {
+                ConversationConfiguration()
+            }
             return try Operative(
                 name: "Hayes Analyzer",
                 description: "Distills lessons from a completed agent turn.",
                 provider: .anthropic(apiKey: apiKey),
                 systemPrompt: MemoryPrompts.analysis,
                 tools: [submit],
-                budget: Budget(maxTurns: 2)
+                budget: Budget(maxTurns: 2),
+                configuration: configuration
             )
         }
     }

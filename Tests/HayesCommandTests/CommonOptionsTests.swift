@@ -15,21 +15,4 @@ struct CommonOptionsTests {
         let args = try CommonOptions.parse(["--db", "/tmp/foo.sqlite"])
         #expect(args.db == "/tmp/foo.sqlite")
     }
-
-    @Test("backend flags default to afm extractor and anthropic analyzer")
-    func backendDefaults() throws {
-        let args = try CommonOptions.parse([])
-        #expect(args.contextBackend == .afm)
-        #expect(args.analyzerBackend == .anthropic)
-    }
-
-    @Test("backend flags accept overrides")
-    func backendOverrides() throws {
-        let args = try CommonOptions.parse([
-            "--context-backend", "anthropic",
-            "--analyzer-backend", "afm",
-        ])
-        #expect(args.contextBackend == .anthropic)
-        #expect(args.analyzerBackend == .afm)
-    }
 }
