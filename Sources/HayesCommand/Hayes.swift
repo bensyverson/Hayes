@@ -11,7 +11,7 @@ struct Hayes: AsyncParsableCommand {
     static let configuration: CommandConfiguration = .init(
         commandName: "hayes",
         abstract: "Automatic memory for LLM agents.",
-        version: "0.1.0",
+        version: "0.1.1",
         subcommands: [
             RecallCommand.self,
             AssessCommand.self,
