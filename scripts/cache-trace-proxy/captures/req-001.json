@@ -1,0 +1,13 @@
+{
+  "max_tokens": 1,
+  "messages": [
+    {
+      "content": "quota",
+      "role": "user"
+    }
+  ],
+  "metadata": {
+    "user_id": "{\"device_id\":\"b16a441905cc50f57187324336b96688f484702c91c9edb6ba0231724c5174aa\",\"account_uuid\":\"779402d4-785c-4555-99f5-074b7fe9fde6\",\"session_id\":\"7e8b2029-e9e9-4b57-99a4-c5f7fc6f698b\"}"
+  },
+  "model": "claude-opus-4-7[1m]"
+}

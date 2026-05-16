@@ -1,0 +1,52 @@
+{
+  "max_tokens": 64000,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Can you tell me whether there's any cache control in this tool?",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "metadata": {
+    "user_id": "{\"device_id\":\"b16a441905cc50f57187324336b96688f484702c91c9edb6ba0231724c5174aa\",\"account_uuid\":\"779402d4-785c-4555-99f5-074b7fe9fde6\",\"session_id\":\"7e8b2029-e9e9-4b57-99a4-c5f7fc6f698b\"}"
+  },
+  "model": "claude-opus-4-7",
+  "output_config": {
+    "effort": "xhigh",
+    "format": {
+      "schema": {
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "type": "json_schema"
+    }
+  },
+  "stream": true,
+  "system": [
+    {
+      "text": "x-anthropic-billing-header: cc_version=2.1.141.fe2; cc_entrypoint=cli; cch=f9268;",
+      "type": "text"
+    },
+    {
+      "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+      "type": "text"
+    },
+    {
+      "text": "Generate a concise, sentence-case title (3-7 words) that captures the main topic or goal of this coding session. The title should be clear enough that the user recognizes the session in a list. Use sentence case: capitalize only the first word and proper nouns.\n\nReturn JSON with a single \"title\" field.\n\nGood examples:\n{\"title\": \"Fix login button on mobile\"}\n{\"title\": \"Add OAuth authentication\"}\n{\"title\": \"Debug failing CI tests\"}\n{\"title\": \"Refactor API client error handling\"}\n\nBad (too vague): {\"title\": \"Code changes\"}\nBad (too long): {\"title\": \"Investigate and fix the issue where the login button does not respond on mobile devices\"}\nBad (wrong case): {\"title\": \"Fix Login Button On Mobile\"}",
+      "type": "text"
+    }
+  ],
+  "tools": []
+}
