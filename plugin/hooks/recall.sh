@@ -12,7 +12,8 @@ if ! command -v jq >/dev/null 2>&1; then
     exit 0
 fi
 
-if ! command -v hayes >/dev/null 2>&1; then
+hayes_bin="${CLAUDE_PLUGIN_ROOT:-}/bin/hayes"
+if [[ ! -x "$hayes_bin" ]]; then
     exit 0
 fi
 
@@ -24,7 +25,7 @@ if [[ -z "$transcript" || -z "$session" ]]; then
     exit 0
 fi
 
-context=$(hayes recall "$transcript" --session-id "$session" 2>/dev/null || true)
+context=$("$hayes_bin" recall "$transcript" --session-id "$session" 2>/dev/null || true)
 
 if [[ -z "$context" ]]; then
     exit 0

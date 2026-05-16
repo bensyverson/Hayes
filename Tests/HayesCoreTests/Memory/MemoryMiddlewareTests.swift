@@ -131,8 +131,10 @@ struct MemoryMiddlewareTests {
         let seedNode = try #require(try await store.allNodes().first { $0.text == "spa website" })
         let behaviorNode = try #require(try await store.allNodes().first { $0.text == "warm gold palette" })
         let edge = try await store.findEdge(sourceID: seedNode.id, targetID: behaviorNode.id)
-        // Self-assessment scale = 0.3 → 0 + 0.1·0.3·(1−0) = 0.03
-        #expect(abs((edge?.weight ?? 0) - 0.03) < 1e-9)
+        // First-contact positive self-assessment: EMA would land at 0.03
+        // (0 + 0.1·0.3·(1−0)), but the insert floors to `minEdgeWeight`
+        // so the lesson is eligible for recall on the next pass.
+        #expect(abs((edge?.weight ?? 0) - RetrievalConfig.default.minEdgeWeight) < 1e-9)
     }
 
     @Test("negative user lesson creates a negatively-weighted edge")

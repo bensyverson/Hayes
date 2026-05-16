@@ -15,8 +15,15 @@ public extension GraphStore {
     /// to the distance to the target, the update shrinks smoothly as the
     /// weight approaches saturation and any edge remains rehabilitable.
     ///
-    /// The edge is created on first contact. `sentiment == 0` is "no
-    /// evidence" — it is a no-op and does not create an edge.
+    /// The edge is created on first contact. For positive sentiment, the
+    /// initial weight is floored at ``RetrievalConfig/minEdgeWeight`` so
+    /// the lesson is eligible for recall immediately; otherwise a single
+    /// self-assessment can bury the edge below the surfacing floor and
+    /// prevent it from ever earning further reinforcement. Negative
+    /// first-contact stays at the EMA result. See <doc:ReinforcementMath>.
+    ///
+    /// `sentiment == 0` is "no evidence" — it is a no-op and does not
+    /// create an edge.
     ///
     /// - Parameters:
     ///   - seedID: The context (source) node identifier.
@@ -55,10 +62,19 @@ public extension GraphStore {
                 provenance: provenance
             )
         } else {
+            // First-contact insert: a positive lesson must be eligible
+            // for recall immediately. A single self-assessment otherwise
+            // lands below `minEdgeWeight` and gets buried before it can
+            // surface, drive behavior, or earn reinforcement. Negative
+            // first-contact stays at the EMA result so "avoid this"
+            // edges record as designed.
+            let initial = sentiment > 0
+                ? max(updated, config.minEdgeWeight)
+                : updated
             _ = try insertEdge(
                 sourceID: seedID,
                 targetID: behaviorID,
-                weight: updated,
+                weight: initial,
                 provenance: provenance
             )
         }

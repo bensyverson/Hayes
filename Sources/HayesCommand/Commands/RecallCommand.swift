@@ -75,6 +75,15 @@ struct RecallCommand: AsyncParsableCommand {
 
     mutating func run() async throws {
         let transcriptURL = URL(fileURLWithPath: transcript)
+
+        // UserPromptSubmit fires before Claude Code writes the new prompt to
+        // the transcript, so on the first turn of a fresh session the file
+        // doesn't exist yet. That's "no history," not an error — bail
+        // quietly so the hook produces empty output rather than a failure.
+        guard FileManager.default.fileExists(atPath: transcriptURL.path) else {
+            return
+        }
+
         let session = sessionID ?? RecallCommand.defaultSessionID(for: transcriptURL)
 
         let loader = TranscriptLoader()

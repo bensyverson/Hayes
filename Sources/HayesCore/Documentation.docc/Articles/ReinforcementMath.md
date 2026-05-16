@@ -53,6 +53,23 @@ With `feedbackRate = 0.10`:
 Fresh `(seed, behavior)` pairs have no edge at all — the first non-zero
 feedback creates the edge at that first `w'` value.
 
+### First-contact floor for positive sentiment
+
+A lesson that lands below ``RetrievalConfig/minEdgeWeight`` on its first
+appearance can never surface, so it can never drive behavior or earn
+reinforcement — it is effectively buried at birth. To keep new lessons
+recoverable, the first-contact insert path floors *positive* sentiment to
+the surfacing floor:
+
+```
+initial = sentiment > 0 ? max(w', minEdgeWeight) : w'
+```
+
+Subsequent reinforcement on that edge resumes the normal EMA from the
+floored starting weight. Negative first-contact stays at the EMA result so
+"avoid this pairing" edges record their full magnitude. This rule applies
+only to the *insert* branch; updates to an existing edge are unaffected.
+
 ## Retrieval interaction
 
 ``RetrievalConfig/minEdgeWeight`` is a *positive* floor: only edges with weight

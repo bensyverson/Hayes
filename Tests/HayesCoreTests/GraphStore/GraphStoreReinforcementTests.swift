@@ -137,6 +137,29 @@ struct GraphStoreReinforcementTests {
         #expect(abs((edge?.weight ?? 0) - 0.10) < 1e-9)
     }
 
+    /// A fresh edge from positive self-assessment must be eligible for
+    /// recall on the next pass; otherwise the lesson is buried before it
+    /// can drive any behavior or earn reinforcement. The design pins the
+    /// initial weight to the surfacing floor (`minEdgeWeight`); the EMA
+    /// resumes from there on subsequent reinforcement.
+    @Test("first-time positive self-assessment floors the new edge at minEdgeWeight")
+    func firstPositiveSelfAssessmentFloorsToMinEdgeWeight() async throws {
+        let store = try GraphStore.inMemory()
+        let seed = try await store.insertNode(text: "seed", embedding: [0.0])
+        let behavior = try await store.insertNode(text: "behavior", embedding: [0.0])
+        let config: RetrievalConfig = .default
+        try await store.reinforceEdge(
+            seedID: seed.id,
+            behaviorID: behavior.id,
+            sentiment: 1.0,
+            sourceScale: config.selfAssessmentScale,
+            config: config
+        )
+        let edge = try await store.findEdge(sourceID: seed.id, targetID: behavior.id)
+        let weight = edge?.weight ?? 0
+        #expect(weight >= config.minEdgeWeight)
+    }
+
     @Test("first-time negative feedback creates the edge at a negative weight")
     func firstNegativeCreatesEdge() async throws {
         let store = try GraphStore.inMemory()

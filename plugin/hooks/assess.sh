@@ -12,7 +12,8 @@ if ! command -v jq >/dev/null 2>&1; then
     exit 0
 fi
 
-if ! command -v hayes >/dev/null 2>&1; then
+hayes_bin="${CLAUDE_PLUGIN_ROOT:-}/bin/hayes"
+if [[ ! -x "$hayes_bin" ]]; then
     exit 0
 fi
 
@@ -23,4 +24,4 @@ if [[ -z "$transcript" ]]; then
     exit 0
 fi
 
-hayes assess "$transcript" >/dev/null 2>&1 || true
+"$hayes_bin" assess "$transcript" >/dev/null 2>&1 || true
