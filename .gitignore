@@ -11,3 +11,4 @@ DerivedData/
 .jobs.db
 .jobs.db-shm
 .jobs.db-wal
+scripts/cache-trace-proxy/captures/
