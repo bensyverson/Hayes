@@ -80,6 +80,14 @@ struct RecallCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Emit JSON instead of the framed plaintext block.")
     var json: Bool = false
 
+    /// When set, recall prepends a one-line nudge to its plaintext output if
+    /// no Anthropic API key can be resolved — surfacing, through recall's
+    /// injection channel, that `assess` can't authenticate. Opt-in so it only
+    /// fires where Anthropic is expected (the plugin passes it); standalone
+    /// `hayes recall` stays silent. Ignored with `--json`.
+    @Flag(name: .customLong("warn-missing-anthropic-key"), help: "Warn (via plaintext output) when no Anthropic key is available for assess.")
+    var warnMissingAnthropicKey: Bool = false
+
     /// Anthropic API key for the context-extractor when
     /// ``contextExtractor`` is ``MemoryBackendName/anthropic``. Falls
     /// back to the `ANTHROPIC_API_KEY` environment variable.
@@ -89,16 +97,44 @@ struct RecallCommand: AsyncParsableCommand {
     init() {}
 
     mutating func run() async throws {
+        let body = try await recalledOutput()
+
+        // --json is for machine callers, so it stays pure: no plaintext nudge.
+        if json {
+            if let body, !body.isEmpty {
+                print(body)
+            }
+            return
+        }
+
+        // The nudge resolves the key only when opted in, so an unflagged or
+        // AFM-only run never reads the Keychain here.
+        let nudge: String? = try warnMissingAnthropicKey
+            ? RecallCommand.missingAnthropicKeyNudge(
+                warn: true,
+                resolvedKey: AnthropicCredentialResolver.resolve(flag: anthropicAPIKey)
+            )
+            : nil
+
+        let parts = [nudge, body].compactMap { $0 }.filter { !$0.isEmpty }
+        if !parts.isEmpty {
+            print(parts.joined(separator: "\n\n"))
+        }
+    }
+
+    /// Runs the recall pipeline and returns the rendered output (JSON or the
+    /// framed plaintext block), or `nil` when there's nothing to recall from.
+    private func recalledOutput() async throws -> String? {
         let transcriptURL = URL(fileURLWithPath: transcript)
 
         // UserPromptSubmit fires before Claude Code writes the new prompt to
         // the transcript, so on the first turn of a fresh session the file
         // doesn't exist yet. When the harness passes the prompt via --prompt
         // we can still recall from it; otherwise that's "no history," not an
-        // error — bail quietly so the hook produces empty output.
+        // error — return nothing so the hook produces empty output.
         let transcriptExists = FileManager.default.fileExists(atPath: transcriptURL.path)
         guard transcriptExists || prompt?.isEmpty == false else {
-            return
+            return nil
         }
 
         let session = sessionID ?? RecallCommand.defaultSessionID(for: transcriptURL)
@@ -108,7 +144,7 @@ struct RecallCommand: AsyncParsableCommand {
             ? try await loader.load(path: transcriptURL, format: format, sessionID: sessionID)
             : []
         let messages = RecallCommand.combinedMessages(loaded: loaded, prompt: prompt)
-        guard !messages.isEmpty else { return }
+        guard !messages.isEmpty else { return nil }
 
         let dbURL = HayesPaths.resolve(dbArgument: common.db)
         let store = try GraphStore(path: dbURL)
@@ -128,13 +164,10 @@ struct RecallCommand: AsyncParsableCommand {
         )
 
         if json {
-            try print(RecallCommand.renderJSON(result))
-        } else {
-            let text = RecallCommand.renderPlaintext(result, dryRun: dryRun)
-            if !text.isEmpty {
-                print(text)
-            }
+            return try RecallCommand.renderJSON(result)
         }
+        let text = RecallCommand.renderPlaintext(result, dryRun: dryRun)
+        return text.isEmpty ? nil : text
     }
 
     // MARK: - Helpers
@@ -201,12 +234,33 @@ struct RecallCommand: AsyncParsableCommand {
         return String(decoding: data, as: UTF8.self)
     }
 
+    /// The one-line nudge surfaced when memory distillation can't
+    /// authenticate. Recall is the only hook event with an injection channel,
+    /// so it carries the warning on behalf of `assess` (whose Stop/SessionStart
+    /// hooks can't inject). Returns `nil` unless warning is enabled *and* no
+    /// key resolves, so it only fires where Anthropic is actually expected.
+    /// - Parameters:
+    ///   - warn: Whether the caller opted into the warning (the plugin does).
+    ///   - resolvedKey: The Anthropic key the resolver found, if any.
+    /// - Returns: The nudge text, or `nil` when no warning is warranted.
+    static func missingAnthropicKeyNudge(warn: Bool, resolvedKey: String?) -> String? {
+        guard warn, resolvedKey == nil else {
+            return nil
+        }
+        return "[Hayes] Memory distillation (assess) is disabled: no Anthropic API key found. Run `hayes auth set` to enable it."
+    }
+
     private func makeExtractor() throws -> ContextExtractor? {
         switch contextExtractor {
         case .none:
             return nil
-        case .afm, .anthropic:
-            let key = anthropicAPIKey ?? ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]
+        case .afm:
+            // AFM ignores the key; resolving here would needlessly read the
+            // Keychain (and could prompt) for an on-device-only run.
+            let backend = try contextExtractor.resolveBackend(anthropicAPIKey: nil)
+            return ContextExtractor(llm: backend.makeLLMClient())
+        case .anthropic:
+            let key = try AnthropicCredentialResolver.resolve(flag: anthropicAPIKey)
             let backend = try contextExtractor.resolveBackend(anthropicAPIKey: key)
             return ContextExtractor(llm: backend.makeLLMClient())
         }

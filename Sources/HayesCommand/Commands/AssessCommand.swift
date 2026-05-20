@@ -110,7 +110,11 @@ struct AssessCommand: AsyncParsableCommand {
         let store = try GraphStore(path: dbURL)
         let embeddings = try NLEmbeddingProvider()
 
-        let key = anthropicAPIKey ?? ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]
+        // AFM ignores the key; only the Anthropic path consults the resolver
+        // (and therefore the Keychain), so an AFM run never triggers a prompt.
+        let key: String? = try analyzer == .anthropic
+            ? AnthropicCredentialResolver.resolve(flag: anthropicAPIKey)
+            : nil
         let backend = try analyzer.resolveBackend(anthropicAPIKey: key)
         let runner = AnalysisRunner(backend: backend, model: model)
         let loader = TranscriptLoader()

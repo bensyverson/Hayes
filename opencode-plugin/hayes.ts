@@ -111,7 +111,10 @@ export const HayesPlugin: Plugin = async ({ $ }) => {
         const sessionID = input?.sessionID
         if (!hayes || !sessionID) return
 
-        const result = await $`${hayes} recall ${db} --format opencode --session-id ${sessionID}`
+        // --warn-missing-anthropic-key: the assess path below is Anthropic-only
+        // (--batch), so if no key resolves, distillation is silently dead.
+        // Recall carries that one-line warning since assess can't inject.
+        const result = await $`${hayes} recall ${db} --format opencode --session-id ${sessionID} --warn-missing-anthropic-key`
           .nothrow()
           .quiet()
         const block = result.stdout?.toString().trim()

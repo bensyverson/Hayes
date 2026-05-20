@@ -55,6 +55,23 @@ plugin recalls memories before each reply (`experimental.chat.system.transform`)
 and runs assess (batch) when a session goes idle (`session.idle`) or starts
 (`session.created`), reading OpenCode's own session database directly.
 
+### Anthropic API key
+
+Assess distils lessons through Anthropic's API, so it needs an Anthropic API
+key. Provision it once into the macOS Keychain:
+
+```bash
+hayes auth set       # prompts on the terminal; input is not echoed
+hayes auth status    # confirm it's stored
+```
+
+Prefer this over exporting `ANTHROPIC_API_KEY`: a key in the environment is
+also picked up by the harness itself (under Claude Code it can switch a
+subscription onto API billing), whereas a key in the Keychain stays Hayes's
+alone. `ANTHROPIC_API_KEY` still works as an override for CI or one-off runs.
+See the "Providing the Anthropic API key" article in the DocC catalog for the
+full resolution order and rationale.
+
 ### Requirements
 
 macOS 26, plus `jq` on your PATH for the Claude Code hooks. For development,

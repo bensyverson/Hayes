@@ -55,6 +55,13 @@ middleware and CLI layer above it depend on:
 - ``MemoryPrompts``
 - <doc:MemoryPipeline>
 
+### Credentials
+
+- ``CredentialStore``
+- ``KeychainCredentialStore``
+- ``HayesCredential``
+- <doc:Credentials>
+
 ### CLI integration
 
 - <doc:UsingHayesAsACLIHook>
