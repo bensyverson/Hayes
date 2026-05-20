@@ -40,7 +40,7 @@ import { join } from "node:path"
 
 // Sync point: kept in lockstep with plugin/.claude-plugin/plugin.json and
 // Sources/HayesCommand/Hayes.swift by scripts/release.sh.
-const HAYES_VERSION = "0.2.0"
+const HAYES_VERSION = "0.3.0"
 
 const REPO = "bensyverson/Hayes"
 const ASSET = "hayes-macos-universal"
