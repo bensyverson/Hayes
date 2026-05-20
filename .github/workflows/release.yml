@@ -10,12 +10,15 @@ on:
       - "Package.swift"
       - "Package.resolved"
       - "plugin/**"
+      - "opencode-plugin/**"
       - "scripts/**"
       - ".github/workflows/release.yml"
 
 jobs:
   build:
     runs-on: macos-15
+    permissions:
+      contents: write # required to create the release on a tag push
     steps:
       - uses: actions/checkout@v4
 
@@ -36,18 +39,21 @@ jobs:
       - name: Run full test suite
         run: swift test --quiet
 
-      - name: Build release binary into plugin/bin/
-        run: ./scripts/build-plugin.sh
+      - name: Build universal release binary
+        run: swift build -c release --arch arm64 --arch x86_64
 
-      - name: Smoke-test staged binary
+      - name: Smoke-test built binary
         run: |
-          ./plugin/bin/hayes --version
-          ./plugin/bin/hayes --help > /dev/null
+          binary=.build/apple/Products/Release/hayes
+          lipo -info "$binary"
+          "$binary" --version
+          "$binary" --help > /dev/null
 
       - name: Verify hook scripts are executable
         run: |
           test -x ./plugin/hooks/recall.sh
           test -x ./plugin/hooks/assess.sh
+          test -x ./plugin/hooks/lib/ensure-hayes.sh
 
       - name: Validate plugin and marketplace manifests are valid JSON
         run: |
@@ -55,12 +61,27 @@ jobs:
           jq empty plugin/hooks/hooks.json
           jq empty .claude-plugin/marketplace.json
 
-      - name: Verify committed binary version matches plugin manifest
+      - name: Verify version sync points agree
         run: |
           manifest_version=$(jq -r '.version' plugin/.claude-plugin/plugin.json)
-          binary_version=$(./plugin/bin/hayes --version)
-          if [[ "$manifest_version" != "$binary_version" ]]; then
-            echo "::error::plugin/.claude-plugin/plugin.json version ($manifest_version) does not match binary version ($binary_version)"
+          binary_version=$(.build/apple/Products/Release/hayes --version)
+          ts_version=$(sed -nE 's/.*HAYES_VERSION = "([^"]+)".*/\1/p' opencode-plugin/hayes.ts)
+          if [[ "$manifest_version" != "$binary_version" || "$manifest_version" != "$ts_version" ]]; then
+            echo "::error::version mismatch — manifest=$manifest_version binary=$binary_version opencode=$ts_version"
             echo "Did you forget to run ./scripts/release.sh before tagging?"
             exit 1
           fi
+
+      - name: Publish release with the universal binary
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          cp .build/apple/Products/Release/hayes dist/hayes-macos-universal
+          (cd dist && shasum -a 256 hayes-macos-universal > hayes-macos-universal.sha256)
+          gh release create "$GITHUB_REF_NAME" \
+            dist/hayes-macos-universal \
+            dist/hayes-macos-universal.sha256 \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

@@ -8,15 +8,18 @@ Claude Code's hook surface.
 ```
 plugin/
 ├── .claude-plugin/plugin.json   # manifest (name, version, license, …)
-├── bin/hayes                    # prebuilt CLI; auto-added to PATH
 └── hooks/
     ├── hooks.json               # event registrations
     ├── recall.sh                # UserPromptSubmit → hayes recall
-    └── assess.sh                # Stop → hayes assess
+    ├── assess.sh                # Stop → hayes assess
+    └── lib/ensure-hayes.sh      # downloads + caches the release binary
 ```
 
-`bin/hayes` is the committed release binary. Rebuild it from the repo
-root with `./scripts/build-plugin.sh` whenever the CLI changes.
+The `hayes` binary is **not** committed. On first run each hook resolves
+it via `hooks/lib/ensure-hayes.sh`, which downloads the binary matching the
+manifest version from the GitHub release and caches it under
+`${XDG_CACHE_HOME:-~/.cache}/hayes/`. Set `HAYES_BIN` to skip the download
+and use a local build instead (see Testing locally).
 
 ## Hook contracts
 
@@ -47,8 +50,9 @@ the CLI faults — a broken hook should never break the user's turn.
 ## Testing locally
 
 ```bash
-# Stage the binary (once per CLI change)
+# Build a local binary and point the bootstrap at it
 ./scripts/build-plugin.sh
+export HAYES_BIN="$(pwd)/.build/release/hayes"
 
 # Load the plugin into a Claude Code session
 claude --plugin-dir ./plugin
@@ -65,5 +69,13 @@ claude plugin validate ./plugin
 
 ## Distribution
 
-The plugin is currently consumed via `--plugin-dir`. A marketplace
-entry (and the release plumbing that comes with it) will land separately.
+The plugin is published through the marketplace manifest at
+`.claude-plugin/marketplace.json` in the repo root. Users install it with:
+
+```
+/plugin marketplace add bensyverson/Hayes
+/plugin install hayes@hayes
+```
+
+The binary is delivered out-of-band by the bootstrap (see Layout), so the
+marketplace clone stays small and architecture-independent.

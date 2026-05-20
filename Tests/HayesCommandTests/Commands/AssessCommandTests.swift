@@ -36,6 +36,13 @@ struct AssessCommandParsingTests {
         #expect(cmd.storeSource == true)
         #expect(cmd.model == nil)
         #expect(cmd.sessionID == nil)
+        #expect(cmd.format == .auto)
+    }
+
+    @Test("--format opencode is captured")
+    func formatOverride() throws {
+        let cmd = try AssessCommand.parse(["/tmp/storage", "--format", "opencode"])
+        #expect(cmd.format == .opencode)
     }
 
     @Test("--strategy one-shot parses")

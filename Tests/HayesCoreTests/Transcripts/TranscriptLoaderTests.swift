@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 @testable import HayesCore
 import Operator
 import Testing
@@ -46,6 +47,43 @@ struct TranscriptLoaderTests {
         }
     }
 
+    @Test("explicit opencode format with a session id dispatches to the OpenCode parser")
+    func explicitOpenCode() async throws {
+        let db = try writeOpenCodeSession(sessionID: "s1", text: "hello")
+        defer { try? FileManager.default.removeItem(at: db.deletingLastPathComponent()) }
+
+        let messages = try await TranscriptLoader().load(path: db, format: .opencode, sessionID: "s1")
+        #expect(messages.count == 1)
+        #expect(messages[0].role == .user)
+        #expect(messages[0].textContent == "hello")
+    }
+
+    @Test("auto-detects OpenCode from an opencode.db path")
+    func autoDetectsOpenCode() async throws {
+        let db = try writeOpenCodeSession(sessionID: "s1", text: "hello")
+        defer { try? FileManager.default.removeItem(at: db.deletingLastPathComponent()) }
+
+        let messages = try await TranscriptLoader().load(path: db, format: .auto, sessionID: "s1")
+        #expect(messages.count == 1)
+        #expect(messages[0].textContent == "hello")
+    }
+
+    @Test("opencode without a session id throws sessionIDRequired")
+    func opencodeRequiresSessionID() async throws {
+        let db = try writeOpenCodeSession(sessionID: "s1", text: "hello")
+        defer { try? FileManager.default.removeItem(at: db.deletingLastPathComponent()) }
+
+        do {
+            _ = try await TranscriptLoader().load(path: db, format: .opencode, sessionID: nil)
+            Issue.record("expected .sessionIDRequired to throw")
+        } catch let error as TranscriptLoader.LoadError {
+            guard case .sessionIDRequired(.opencode) = error else {
+                Issue.record("wrong case: \(error)")
+                return
+            }
+        }
+    }
+
     @Test("openaiResponses returns a not-implemented error")
     func openaiResponsesNotImplemented() async throws {
         let url = try writeFixture(name: "any.json", contents: "{}\n")
@@ -85,5 +123,39 @@ struct TranscriptLoaderTests {
             .appendingPathComponent("hayes-loader-\(UUID().uuidString)-\(name)")
         try contents.data(using: .utf8)?.write(to: url)
         return url
+    }
+
+    /// Builds a minimal single-message OpenCode `opencode.db` inside a fresh
+    /// temp directory and returns the database file URL (named `opencode.db`
+    /// so auto-detection can recognize it).
+    private func writeOpenCodeSession(sessionID: String, text: String) throws -> URL {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("hayes-loader-oc-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let db = dir.appendingPathComponent("opencode.db")
+        let queue = try DatabaseQueue(path: db.path)
+        try queue.write { database in
+            try database.execute(sql: """
+            CREATE TABLE message (
+              id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+              time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL
+            )
+            """)
+            try database.execute(sql: """
+            CREATE TABLE part (
+              id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL,
+              time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL
+            )
+            """)
+            try database.execute(
+                sql: "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, 1, 1, ?)",
+                arguments: ["msg_1", sessionID, #"{"role":"user"}"#]
+            )
+            try database.execute(
+                sql: "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, 1, 1, ?)",
+                arguments: ["prt_1", "msg_1", sessionID, #"{"type":"text","text":"\#(text)"}"#]
+            )
+        }
+        return db
     }
 }

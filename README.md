@@ -17,7 +17,47 @@ short-lived commands operating on a single SQLite graph.
   recall path, the offline assess path, and the inspection / cleanup
   surface around the graph.
 
-## Getting started
+## Install
+
+Hayes installs as a plugin for your agent. You don't build anything — the
+`hayes` binary is downloaded from the GitHub release and cached under
+`~/.cache/hayes/` on first use.
+
+### Claude Code
+
+In a Claude Code session:
+
+```
+/plugin marketplace add bensyverson/Hayes
+/plugin install hayes@hayes
+/reload-plugins
+```
+
+This wires `hayes recall` into the `UserPromptSubmit` hook and `hayes assess`
+into the `Stop` hook, against a shared SQLite graph at `~/.hayes/graph.sqlite`.
+
+### OpenCode
+
+Install the plugin for all projects:
+
+```bash
+mkdir -p ~/.config/opencode/plugin
+curl -fsSL https://raw.githubusercontent.com/bensyverson/Hayes/main/opencode-plugin/hayes.ts \
+  -o ~/.config/opencode/plugin/hayes.ts
+```
+
+…or per-project by placing `hayes.ts` in `.opencode/plugin/` instead. The
+plugin recalls memories before each reply (`experimental.chat.system.transform`)
+and runs assess when a session goes idle (`session.idle`), reading OpenCode's
+own session database directly.
+
+### Requirements
+
+macOS, plus `jq` on your PATH for the Claude Code hooks. For development,
+point the plugins at a locally built binary instead of the release by setting
+`HAYES_BIN` to its path — see `./scripts/build-plugin.sh`.
+
+## Building from source
 
 Requires Swift 6.3 and macOS 15+.
 
@@ -53,19 +93,21 @@ Every command accepts `--db <PATH>` to override the SQLite location
 (default: `~/.hayes/graph.sqlite`). Run `hayes help <subcommand>` for the
 full flag surface.
 
-### Wiring into Claude Code
+### Hook internals
 
-See the "Using Hayes as a CLI hook" article in the HayesCore DocC
-catalog (`Sources/HayesCore/Documentation.docc/Articles/UsingHayesAsACLIHook.md`)
-for the hook contracts, including the JSON-on-stdin payload shape, the
-documented `hookSpecificOutput.additionalContext` output envelope, the
-AFM-vs-Anthropic backend tradeoffs, and the `--context-extractor none`
-recipe for CI / batch imports.
+The plugins are thin wrappers over these two commands. For the hook
+contracts — the JSON-on-stdin payload shape, the documented
+`hookSpecificOutput.additionalContext` envelope, the OpenCode
+`--format opencode` path that reads `opencode.db`, the AFM-vs-Anthropic
+backend tradeoffs, and the `--context-extractor none` recipe for CI / batch
+imports — see the "Using Hayes as a CLI hook" article in the HayesCore DocC
+catalog (`Sources/HayesCore/Documentation.docc/Articles/UsingHayesAsACLIHook.md`).
 
-Both commands default their identity to the transcript filename stem,
-which for Claude Code is the harness-native session UUID — so the live
-recall path and the offline assess path agree without any extra
-plumbing.
+For Claude Code, both commands default their identity to the transcript
+filename stem (the harness-native session UUID), so the live recall path and
+the offline assess path agree with no extra plumbing. For OpenCode, every
+session lives in one shared database, so the plugin passes `--session-id`
+explicitly.
 
 ## Documentation
 

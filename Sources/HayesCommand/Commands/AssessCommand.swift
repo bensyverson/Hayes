@@ -29,6 +29,13 @@ struct AssessCommand: AsyncParsableCommand {
     @Option(name: .customLong("session-id"), help: "Override transcript identity. Single-transcript only.")
     var sessionID: String?
 
+    /// Transcript format. ``TranscriptLoader/Format/auto`` (the default)
+    /// infers the format from a Claude Code JSONL file; pass
+    /// ``TranscriptLoader/Format/opencode`` with `--session-id` to read an
+    /// OpenCode storage directory instead.
+    @Option(name: .long, help: "Transcript format: auto (default), claudeCode, or opencode.")
+    var format: TranscriptLoader.Format = .auto
+
     /// Lesson-extraction strategy.
     @Option(name: .long, help: "parallel (default) or one-shot.")
     var strategy: StrategyChoice = .parallel
@@ -104,7 +111,7 @@ struct AssessCommand: AsyncParsableCommand {
         for path in transcripts {
             let url = URL(fileURLWithPath: path)
             let identity = sessionID ?? AssessCommand.defaultTranscriptIdentity(for: url)
-            let messages = try await loader.load(path: url)
+            let messages = try await loader.load(path: url, format: format, sessionID: sessionID)
             let result = try await service.assess(
                 messages: messages,
                 transcriptIdentity: identity,

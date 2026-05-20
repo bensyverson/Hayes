@@ -12,8 +12,13 @@ if ! command -v jq >/dev/null 2>&1; then
     exit 0
 fi
 
-hayes_bin="${CLAUDE_PLUGIN_ROOT:-}/bin/hayes"
-if [[ ! -x "$hayes_bin" ]]; then
+# Resolve the hayes binary via the bootstrap, which downloads + caches the
+# release binary on first run. Any failure degrades to "assess skipped."
+plugin_root="${CLAUDE_PLUGIN_ROOT:-}"
+version=$(jq -r '.version // empty' "${plugin_root}/.claude-plugin/plugin.json" 2>/dev/null || true)
+[[ -n "$version" ]] || exit 0
+hayes_bin=$("${plugin_root}/hooks/lib/ensure-hayes.sh" "$version" 2>/dev/null || true)
+if [[ -z "$hayes_bin" || ! -x "$hayes_bin" ]]; then
     exit 0
 fi
 

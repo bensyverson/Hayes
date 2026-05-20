@@ -32,6 +32,13 @@ struct RecallCommand: AsyncParsableCommand {
     @Option(name: .customLong("session-id"), help: "Session identifier. Defaults to the transcript filename stem.")
     var sessionID: String?
 
+    /// Transcript format. ``TranscriptLoader/Format/auto`` (the default)
+    /// infers the format from a Claude Code JSONL file; pass
+    /// ``TranscriptLoader/Format/opencode`` with `--session-id` to read an
+    /// OpenCode storage directory instead.
+    @Option(name: .long, help: "Transcript format: auto (default), claudeCode, or opencode.")
+    var format: TranscriptLoader.Format = .auto
+
     /// Backend to use for the optional ``HayesCore/ContextExtractor``
     /// pre-stage. ``MemoryBackendName/none`` disables the extractor
     /// entirely; recall then uses the last user message verbatim as the
@@ -87,7 +94,7 @@ struct RecallCommand: AsyncParsableCommand {
         let session = sessionID ?? RecallCommand.defaultSessionID(for: transcriptURL)
 
         let loader = TranscriptLoader()
-        let messages = try await loader.load(path: transcriptURL)
+        let messages = try await loader.load(path: transcriptURL, format: format, sessionID: sessionID)
 
         let dbURL = HayesPaths.resolve(dbArgument: common.db)
         let store = try GraphStore(path: dbURL)

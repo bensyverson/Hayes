@@ -28,6 +28,13 @@ struct RecallCommandParsingTests {
         #expect(cmd.json == false)
         #expect(cmd.contextExtractor == .afm)
         #expect(cmd.sessionID == nil)
+        #expect(cmd.format == .auto)
+    }
+
+    @Test("--format opencode is captured")
+    func formatOverride() throws {
+        let cmd = try RecallCommand.parse(["/tmp/storage", "--format", "opencode"])
+        #expect(cmd.format == .opencode)
     }
 
     @Test("--session-id is captured")
