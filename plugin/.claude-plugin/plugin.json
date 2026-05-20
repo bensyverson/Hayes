@@ -1,7 +1,7 @@
 {
   "name": "hayes",
   "description": "Automatic memory for LLM agents. Wires `hayes recall` and `hayes assess` into Claude Code's UserPromptSubmit and Stop hooks against a shared SQLite graph.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "homepage": "https://github.com/bensyverson/Hayes",
   "repository": "https://github.com/bensyverson/Hayes",
   "license": "MIT",
