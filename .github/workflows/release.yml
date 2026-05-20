@@ -20,7 +20,7 @@ jobs:
     permissions:
       contents: write # required to create the release on a tag push
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The macos-26 image's default Xcode (26.2) ships Swift 6.2.x, but the
       # package's swift-tools-version is 6.3. Select the newest installed
