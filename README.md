@@ -57,13 +57,13 @@ and runs assess (batch) when a session goes idle (`session.idle`) or starts
 
 ### Requirements
 
-macOS, plus `jq` on your PATH for the Claude Code hooks. For development,
+macOS 26, plus `jq` on your PATH for the Claude Code hooks. For development,
 point the plugins at a locally built binary instead of the release by setting
 `HAYES_BIN` to its path — see `./scripts/build-plugin.sh`.
 
 ## Building from source
 
-Requires Swift 6.3 and macOS 15+.
+Requires Swift 6.3 and macOS 26.
 
 ```bash
 swift test               # runs the full test suite
@@ -76,7 +76,7 @@ Two commands carry the load:
 
 ```bash
 hayes recall <transcript> [--session-id <id>]    # called before each agent turn
-hayes assess <transcript>...                      # called after a turn, or in batch
+hayes assess <transcript>...                      # after a turn, or over many transcripts
 ```
 
 `recall` reads the transcript, queries the graph, and prints surfaced
