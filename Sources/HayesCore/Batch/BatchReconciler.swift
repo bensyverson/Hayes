@@ -38,30 +38,6 @@ public struct BatchReconciler: Sendable {
         self.batchClient = batchClient
     }
 
-    /// Collects every ready batch, then submits backlog for `transcripts`.
-    /// - Parameter transcripts: The transcripts to submit backlog for, each
-    ///   an identity paired with its loaded messages.
-    public func reconcile(submitting transcripts: [Submission]) async throws {
-        try await collect()
-        for submission in transcripts {
-            try await submit(transcript: submission.identity, messages: submission.messages)
-        }
-    }
-
-    /// A transcript to submit backlog for.
-    public struct Submission: Sendable {
-        /// The transcript identity.
-        public let identity: String
-        /// The transcript's loaded messages.
-        public let messages: [Operator.Message]
-
-        /// Creates a submission.
-        public init(identity: String, messages: [Operator.Message]) {
-            self.identity = identity
-            self.messages = messages
-        }
-    }
-
     // MARK: - Collect
 
     /// Polls every pending batch; for each that has ended, reinforces its

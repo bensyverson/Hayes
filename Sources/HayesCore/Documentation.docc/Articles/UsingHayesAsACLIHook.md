@@ -234,6 +234,46 @@ changing the analyzer model or prompt, so you want every turn re-judged
 — pass `--reassess`, which ignores the stored progress mark and
 reprocesses from the first turn.
 
+### Batch assess for lower cost
+
+`hayes assess --batch` distils through Anthropic's **Message Batches API**
+instead of live calls. The batch API is a flat ~50% cheaper, which for
+heavy Claude-Code-style turns dwarfs what prompt caching can save. The
+trade-off is latency: a lesson lands once its batch completes — usually
+minutes, 24h SLA worst case — rather than the instant the turn ends.
+**Recall is unaffected**: injected memory is always immediate, because only
+distillation (assess) is deferred, never retrieval. Anthropic-only —
+`--batch` requires `--analyzer anthropic` and an `ANTHROPIC_API_KEY`; AFM
+stays on the live synchronous path.
+
+There's no daemon and no queue. Each `hayes assess --batch <transcript>` is
+one idempotent *reconcile* pass driven entirely off durable state:
+
+1. **Collect** any ready batches — reinforce their completed turns, advance
+   the progress mark, and drop them. A batch that came back with a failed
+   request anywhere in its range is reinforced up to the gap; the tail
+   re-enters the backlog.
+2. **Submit** the transcript's backlog (turns past the progress mark) as a
+   single new batch, unless one is already in flight for it (at most one
+   batch per transcript keeps the progress mark hole-free).
+
+Because it's idempotent and silently degrades, you call it at every
+opportunity and it converges. The shipped plugin wires it on **`SessionStart`**
+(collect batches from earlier sessions, catch this one up) and **`Stop`**
+(submit the finished turn, collect ready ones); the OpenCode plugin uses
+**`session.created`** and **`session.idle`** the same way. A cron backstop
+sweeps the 24h tail and anything the live events missed:
+
+```bash
+# nightly backstop for the batch path
+hayes assess --batch ~/.claude/projects/*/conversation-*.jsonl
+```
+
+One provenance caveat: batch-distilled edges record `source_transcript` and
+`turn_index` but leave `source_excerpt` NULL — the turn's text isn't on hand
+at collection time. `hayes session show` still attributes the edge to its
+transcript and turn; only the inline excerpt is absent.
+
 ### AFM vs Anthropic for the analyzer
 
 `hayes recall`'s extractor is happy on AFM — it's producing short
@@ -281,14 +321,17 @@ same two commands:
   fires, so recall reflects the current turn. The `chat.message` hook (which
   carries the message directly) is the fallback should a future version
   change that ordering.
-- The **`session.idle`** event runs `hayes assess` once the agent finishes,
-  the analogue of Claude Code's `Stop`.
+- The **`session.idle`** event runs `hayes assess --batch` once the agent
+  finishes (the analogue of Claude Code's `Stop`), and **`session.created`**
+  runs it at session start to collect ready batches — mirroring the Claude
+  Code plugin's `Stop` + `SessionStart` wiring (see
+  [Batch assess](#Batch-assess-for-lower-cost)).
 
 Both shell out to:
 
 ```bash
 hayes recall "$OPENCODE_DATA_DIR/opencode.db" --format opencode --session-id "$id"
-hayes assess "$OPENCODE_DATA_DIR/opencode.db" --format opencode --session-id "$id"
+hayes assess "$OPENCODE_DATA_DIR/opencode.db" --format opencode --session-id "$id" --batch
 ```
 
 `--session-id` is **required** here: unlike a JSONL transcript, OpenCode's

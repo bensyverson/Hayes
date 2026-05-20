@@ -6,9 +6,12 @@
 //   - recall: before each assistant reply, surface relevant memory pairs and
 //     inject them into the system prompt (via the `experimental.chat.system.
 //     transform` hook).
-//   - assess: when a session goes idle (the agent has finished replying),
-//     distil lessons from the completed turn and reinforce the graph (via the
-//     `session.idle` event).
+//   - assess: reconcile the memory graph via the Anthropic Message Batches
+//     API (`hayes assess --batch`) on `session.idle` (submit the finished
+//     turn and collect any ready batches) and `session.created` (collect
+//     batches from earlier sessions, catch this one up). Lessons land after
+//     the batch completes — usually minutes — but recall stays immediate;
+//     only distillation is deferred, which is where the ~50% saving is.
 //
 // The `hayes` binary is not bundled. On first use the plugin downloads the
 // universal macOS binary matching HAYES_VERSION from the GitHub release and
@@ -118,15 +121,19 @@ export const HayesPlugin: Plugin = async ({ $ }) => {
       }
     },
 
-    // assess — reinforce the graph from the completed session once it's idle.
+    // assess — reconcile the graph via the batch API. `session.idle` submits
+    // the finished turn and collects ready batches; `session.created`
+    // collects batches from earlier sessions and catches this one up.
     event: async ({ event }: { event: { type: string } }) => {
-      if (event.type !== "session.idle") return
+      if (event.type !== "session.idle" && event.type !== "session.created") return
       try {
         const hayes = await resolveHayes()
         const sessionID = sessionIDFromEvent(event)
         if (!hayes || !sessionID) return
 
-        await $`${hayes} assess ${db} --format opencode --session-id ${sessionID}`.nothrow().quiet()
+        await $`${hayes} assess ${db} --format opencode --session-id ${sessionID} --batch`
+          .nothrow()
+          .quiet()
       } catch {
         // Degrade to "assess skipped".
       }

@@ -34,7 +34,11 @@ In a Claude Code session:
 ```
 
 This wires `hayes recall` into the `UserPromptSubmit` hook and `hayes assess`
-into the `Stop` hook, against a shared SQLite graph at `~/.hayes/graph.sqlite`.
+into the `Stop` and `SessionStart` hooks, against a shared SQLite graph at
+`~/.hayes/graph.sqlite`. Assess runs through Anthropic's batch API (~50%
+cheaper), so distilled lessons land a little after a turn rather than the
+instant it ends — recall, the memory you actually see injected, stays
+immediate.
 
 ### OpenCode
 
@@ -48,8 +52,8 @@ curl -fsSL https://raw.githubusercontent.com/bensyverson/Hayes/main/opencode-plu
 
 …or per-project by placing `hayes.ts` in `.opencode/plugin/` instead. The
 plugin recalls memories before each reply (`experimental.chat.system.transform`)
-and runs assess when a session goes idle (`session.idle`), reading OpenCode's
-own session database directly.
+and runs assess (batch) when a session goes idle (`session.idle`) or starts
+(`session.created`), reading OpenCode's own session database directly.
 
 ### Requirements
 

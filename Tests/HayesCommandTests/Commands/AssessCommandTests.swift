@@ -88,6 +88,19 @@ struct AssessCommandParsingTests {
         }
     }
 
+    @Test("--batch defaults to false and parses to true")
+    func batchFlag() throws {
+        #expect(try AssessCommand.parse(["/tmp/t.jsonl"]).batch == false)
+        #expect(try AssessCommand.parse(["/tmp/t.jsonl", "--batch"]).batch == true)
+    }
+
+    @Test("--batch with --analyzer afm is rejected — batch is anthropic-only")
+    func batchRequiresAnthropic() {
+        #expect(throws: (any Error).self) {
+            _ = try AssessCommand.parse(["/tmp/t.jsonl", "--batch", "--analyzer", "afm"])
+        }
+    }
+
     @Test("--session-id with multiple transcripts is rejected")
     func sessionIDWithMultipleRejected() {
         #expect(throws: (any Error).self) {

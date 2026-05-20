@@ -71,6 +71,14 @@ struct AssessCommand: AsyncParsableCommand {
     @Flag(name: .customLong("reassess"), help: "Reprocess every turn, ignoring stored assess progress.")
     var reassess: Bool = false
 
+    /// Runs the batch assess path instead of the live synchronous one: a
+    /// single reconcile pass that collects any ready batches and submits
+    /// each transcript's backlog to the Anthropic Message Batches API
+    /// (~50% cheaper, ~1-turn delay). Anthropic backend only. The live-only
+    /// knobs (`--strategy`, `--reassess`, `--no-store-source`) don't apply.
+    @Flag(name: .customLong("batch"), help: "Reconcile via the Anthropic Message Batches API (anthropic only).")
+    var batch: Bool = false
+
     /// Anthropic API key for the analyzer when ``analyzer`` is
     /// ``MemoryBackendName/anthropic``. Falls back to
     /// `ANTHROPIC_API_KEY`.
@@ -92,6 +100,9 @@ struct AssessCommand: AsyncParsableCommand {
         if transcripts.count > 1, sessionID != nil {
             throw ValidationError("--session-id can only be used with a single transcript.")
         }
+        if batch, analyzer != .anthropic {
+            throw ValidationError("--batch requires --analyzer anthropic (the batch path is Anthropic-only).")
+        }
     }
 
     mutating func run() async throws {
@@ -102,6 +113,22 @@ struct AssessCommand: AsyncParsableCommand {
         let key = anthropicAPIKey ?? ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]
         let backend = try analyzer.resolveBackend(anthropicAPIKey: key)
         let runner = AnalysisRunner(backend: backend, model: model)
+        let loader = TranscriptLoader()
+
+        if batch {
+            guard case let .anthropic(apiKey) = backend else {
+                throw ValidationError("--batch requires the anthropic backend.")
+            }
+            try await runBatch(
+                store: store,
+                embeddings: embeddings,
+                runner: runner,
+                backend: backend,
+                apiKey: apiKey,
+                loader: loader
+            )
+            return
+        }
 
         let service = AssessService(
             store: store,
@@ -110,7 +137,6 @@ struct AssessCommand: AsyncParsableCommand {
             backend: backend
         )
 
-        let loader = TranscriptLoader()
         let options = resolvedOptions()
         var totalLessons = 0
 
@@ -128,6 +154,52 @@ struct AssessCommand: AsyncParsableCommand {
         }
 
         print("Total: \(totalLessons) lessons across \(transcripts.count) transcript(s).")
+    }
+
+    /// Runs one batch reconcile pass: collect any ready batches globally,
+    /// then submit each transcript's backlog. Anthropic-only.
+    private func runBatch(
+        store: GraphStore,
+        embeddings: NLEmbeddingProvider,
+        runner: AnalysisRunner,
+        backend: MemoryBackend,
+        apiKey: String,
+        loader: TranscriptLoader
+    ) async throws {
+        let assess = AssessService(
+            store: store,
+            embeddings: embeddings,
+            analyzer: runner,
+            backend: backend
+        )
+        let client = AnthropicBatchClient(apiKey: apiKey)
+        let reconciler = BatchReconciler(
+            store: store,
+            assess: assess,
+            analyzer: runner,
+            batchClient: client
+        )
+
+        // Collect ready batches first, independent of the transcripts — a
+        // fresh session (e.g. a SessionStart trigger) may have no readable
+        // transcript yet, but prior batches should still be picked up.
+        try await reconciler.collect()
+
+        var submitted = 0
+        for path in transcripts {
+            let url = URL(fileURLWithPath: path)
+            let identity = sessionID ?? AssessCommand.defaultTranscriptIdentity(for: url)
+            do {
+                let messages = try await loader.load(path: url, format: format, sessionID: sessionID)
+                try await reconciler.submit(transcript: identity, messages: messages)
+                submitted += 1
+            } catch {
+                // Tolerate an unreadable transcript so collection still completes.
+                FileHandle.standardError.write(Data("hayes: skipped \(path): \(error)\n".utf8))
+            }
+        }
+
+        print("Batch reconcile complete: collected ready batches; submitted backlog for \(submitted) of \(transcripts.count) transcript(s).")
     }
 
     // MARK: - Helpers

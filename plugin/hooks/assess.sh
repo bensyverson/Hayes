@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-# Stop hook: read the transcript path off stdin, run `hayes assess` to
-# distil lessons from the completed turn and reinforce graph edges.
+# Stop / SessionStart hook: read the transcript path off stdin and run
+# `hayes assess --batch` to reconcile the memory graph via the Anthropic
+# Message Batches API. One pass collects any ready batches (reinforcing
+# completed turns) and submits this transcript's new backlog. Lessons land
+# after the batch completes (usually minutes), but recall stays immediate —
+# only distillation is deferred, which is where the ~50% batch saving is.
 #
-# Output is suppressed because Stop has no documented injection path;
-# the hook just needs to run. Failures are swallowed so a broken assess
-# can't keep the session from ending.
+# Wired on Stop (submit the just-finished turn, collect prior ones) and
+# SessionStart (collect batches from earlier sessions, catch up this one).
+#
+# Output is suppressed because neither event has a documented injection
+# path; the hook just needs to run. Failures are swallowed so a broken
+# assess can't keep the session from ending.
 
 set -euo pipefail
 
@@ -29,4 +36,4 @@ if [[ -z "$transcript" ]]; then
     exit 0
 fi
 
-"$hayes_bin" assess "$transcript" >/dev/null 2>&1 || true
+"$hayes_bin" assess --batch "$transcript" >/dev/null 2>&1 || true
