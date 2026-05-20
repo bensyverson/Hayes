@@ -16,15 +16,15 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     permissions:
       contents: write # required to create the release on a tag push
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode (Swift 6.3 toolchain)
-        run: sudo xcode-select -s /Applications/Xcode_16.app
-
+      # The macos-26 image defaults to Xcode 26 (Swift 6.3), which the
+      # package's swift-tools-version requires. The toolchain is printed
+      # below so a future image default change is visible in the logs.
       - name: Print toolchain versions
         run: |
           swift --version
