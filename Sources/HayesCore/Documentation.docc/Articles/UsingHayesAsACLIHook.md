@@ -139,6 +139,12 @@ Register the script under the `UserPromptSubmit` event in your
 - `--json` switches the output to a machine-readable payload — useful
   when the harness wants structured data instead of pasting plaintext
   into the prompt.
+- `--warn-missing-anthropic-key` prepends a one-line nudge to recall's
+  *plaintext* output when no Anthropic key resolves, so a silently-dead
+  assess surfaces through the one hook that can inject (see
+  [Providing the Anthropic API key](<doc:Credentials>)). Opt-in: the
+  shipped plugins pass it because their assess path is Anthropic-only;
+  standalone `hayes recall` stays silent. Ignored under `--json`.
 
 ## Wiring `hayes assess` into `Stop` (or cron)
 
@@ -243,8 +249,11 @@ trade-off is latency: a lesson lands once its batch completes — usually
 minutes, 24h SLA worst case — rather than the instant the turn ends.
 **Recall is unaffected**: injected memory is always immediate, because only
 distillation (assess) is deferred, never retrieval. Anthropic-only —
-`--batch` requires `--analyzer anthropic` and an `ANTHROPIC_API_KEY`; AFM
-stays on the live synchronous path.
+`--batch` requires `--analyzer anthropic` and an Anthropic API key; AFM
+stays on the live synchronous path. Provision the key with `hayes auth set`
+(stored in the Keychain) rather than exporting `ANTHROPIC_API_KEY`, which the
+harness also consumes — see
+[Providing the Anthropic API key](<doc:Credentials>).
 
 There's no daemon and no queue. Each `hayes assess --batch <transcript>` is
 one idempotent *reconcile* pass driven entirely off durable state:
@@ -376,6 +385,7 @@ fine to lower `minEdgeWeight` temporarily.
 
 ### Related
 
+- <doc:Credentials>
 - <doc:MemoryPipeline>
 - <doc:RetrievalAlgorithm>
 - <doc:ReinforcementMath>

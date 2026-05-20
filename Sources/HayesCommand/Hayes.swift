@@ -15,6 +15,7 @@ struct Hayes: AsyncParsableCommand {
         subcommands: [
             RecallCommand.self,
             AssessCommand.self,
+            AuthCommand.self,
             InspectCommand.self,
             LsCommand.self,
             ForgetCommand.self,

@@ -34,7 +34,11 @@ fi
 # UserPromptSubmit fires before the prompt is written to the transcript, so
 # pass it through with --prompt: recall then reflects the current turn (and
 # works on the very first turn) instead of lagging one behind.
-args=(recall "$transcript" --session-id "$session")
+#
+# --warn-missing-anthropic-key: the plugin's assess path is Anthropic-only, so
+# if no key is resolvable, distillation is silently dead. Recall is the only
+# hook with an injection channel, so it carries that one-line warning.
+args=(recall "$transcript" --session-id "$session" --warn-missing-anthropic-key)
 [[ -n "$prompt" ]] && args+=(--prompt "$prompt")
 
 context=$("$hayes_bin" "${args[@]}" 2>/dev/null || true)

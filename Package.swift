@@ -17,6 +17,17 @@ let operatorDependency: Package.Dependency = FileManager.default
     ? .package(path: "../Operator")
     : .package(url: "https://github.com/bensyverson/Operator", branch: "main")
 
+/// Same local-checkout-or-published pattern as Operator above: KeyManager is
+/// a small Security-framework wrapper used for Keychain credential storage.
+let keyManagerCheckout = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent() // Hayes/
+    .deletingLastPathComponent() // parent of Hayes/
+    .appendingPathComponent("KeyManager/Package.swift")
+let keyManagerDependency: Package.Dependency = FileManager.default
+    .fileExists(atPath: keyManagerCheckout.path)
+    ? .package(path: "../KeyManager")
+    : .package(url: "https://github.com/bensyverson/KeyManager", branch: "main")
+
 let package = Package(
     name: "Hayes",
     platforms: [.macOS(.v26)],
@@ -26,6 +37,7 @@ let package = Package(
     ],
     dependencies: [
         operatorDependency,
+        keyManagerDependency,
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
         .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.3.0"),
@@ -35,6 +47,7 @@ let package = Package(
             name: "HayesCore",
             dependencies: [
                 .product(name: "Operator", package: "Operator"),
+                .product(name: "KeyManager", package: "KeyManager"),
                 .product(name: "GRDB", package: "GRDB.swift"),
             ]
         ),
