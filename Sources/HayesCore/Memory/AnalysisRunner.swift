@@ -87,6 +87,30 @@ public struct AnalysisRunner: Sendable {
         return result
     }
 
+    /// Builds the analyzer request body for a turn without running the
+    /// agent loop — the seam the batch assess path submits through.
+    ///
+    /// Reuses the same `Operative` and payload formatting as
+    /// ``analyze(messages:thinking:)``, so a batched request is identical to
+    /// the live one. Returns `nil` on non-Anthropic backends: batch is
+    /// Anthropic-only, and Apple Intelligence stays on the live synchronous
+    /// path.
+    ///
+    /// - Parameters:
+    ///   - messages: The conversation slice to analyse.
+    ///   - thinking: The agent's concatenated thinking trace, or empty.
+    /// - Returns: The request body to embed in a batch request's `params`,
+    ///   or `nil` when the backend isn't Anthropic.
+    public func analyzerRequest(
+        for messages: [Operator.Message],
+        thinking: String
+    ) throws -> LLM.OpenAICompatibleAPI.ChatCompletion? {
+        guard case let .anthropic(apiKey) = backend else { return nil }
+        let operative = try makeOperative(box: AnalysisResultBox())
+        let payload = AnalysisRunner.formatPayload(messages: messages, thinking: thinking)
+        return operative.requestBody(for: payload, provider: .anthropic(apiKey: apiKey))
+    }
+
     private func makeOperative(box: AnalysisResultBox) throws -> Operative {
         let submit = SubmitAnalysis(box: box)
         switch backend {
