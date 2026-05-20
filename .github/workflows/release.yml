@@ -22,9 +22,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The macos-26 image defaults to Xcode 26 (Swift 6.3), which the
-      # package's swift-tools-version requires. The toolchain is printed
-      # below so a future image default change is visible in the logs.
+      # The macos-26 image's default Xcode (26.2) ships Swift 6.2.x, but the
+      # package's swift-tools-version is 6.3. Select the newest installed
+      # Xcode whose Swift satisfies that, rather than pinning a patch version
+      # that image updates rotate out from under us.
+      - name: Select an Xcode providing Swift 6.3+
+        run: |
+          required=6.3
+          for app in $(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -Vr); do
+            ver=$("$app/Contents/Developer/usr/bin/swift" --version 2>/dev/null \
+              | grep -oE 'Swift version [0-9.]+' | grep -oE '[0-9.]+$')
+            [ -z "$ver" ] && continue
+            if [ "$(printf '%s\n%s\n' "$required" "$ver" | sort -V | head -1)" = "$required" ]; then
+              echo "Selecting $app (Swift $ver)"
+              sudo xcode-select -s "$app/Contents/Developer"
+              break
+            fi
+          done
+
       - name: Print toolchain versions
         run: |
           swift --version
