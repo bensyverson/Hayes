@@ -69,8 +69,11 @@ set -euo pipefail
 payload=$(cat)
 transcript=$(jq -r '.transcript_path' <<<"$payload")
 session=$(jq -r '.session_id'      <<<"$payload")
+prompt=$(jq -r '.prompt // empty'  <<<"$payload")
 
-context=$(hayes recall "$transcript" --session-id "$session")
+args=(recall "$transcript" --session-id "$session")
+[[ -n "$prompt" ]] && args+=(--prompt "$prompt")
+context=$(hayes "${args[@]}")
 
 jq -n --arg ctx "$context" '{
   hookSpecificOutput: {
@@ -83,6 +86,13 @@ jq -n --arg ctx "$context" '{
 `--session-id` is redundant for Claude Code (the transcript filename
 stem already *is* the session UUID) but passing it makes the contract
 explicit and survives a harness that names its transcripts differently.
+
+`--prompt` matters more than it looks: `UserPromptSubmit` fires *before*
+Claude Code writes the new prompt to the transcript, so without it recall
+is grounded in history through the previous turn (and the very first turn
+sees nothing). Passing the payload's `prompt` makes recall reflect the
+current turn. OpenCode persists the message before its hook fires, so it
+is already current-turn and does not need this.
 
 Register the script under the `UserPromptSubmit` event in your
 `settings.json` (or a plugin's `hooks/hooks.json`):
@@ -115,6 +125,10 @@ Register the script under the `UserPromptSubmit` event in your
   `--context-extractor none` to skip the LLM entirely and fall back to
   the last user message verbatim — the right choice for CI or batch
   imports where you don't want to spend tokens on inference.
+- `--prompt` supplies the in-flight user message out-of-band, appended as
+  the trailing user turn. Use it when the harness has the prompt before it
+  reaches the transcript (Claude Code's `UserPromptSubmit`) so recall is
+  anchored on the current turn rather than the previous one.
 - `--window` controls how many trailing transcript messages the
   extractor sees (default 5).
 - `--dry-run` runs retrieval without persisting to `session_injections`

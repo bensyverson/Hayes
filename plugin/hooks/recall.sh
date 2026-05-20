@@ -25,12 +25,19 @@ fi
 payload=$(cat)
 transcript=$(jq -r '.transcript_path // empty' <<<"$payload")
 session=$(jq -r '.session_id // empty' <<<"$payload")
+prompt=$(jq -r '.prompt // empty' <<<"$payload")
 
 if [[ -z "$transcript" || -z "$session" ]]; then
     exit 0
 fi
 
-context=$("$hayes_bin" recall "$transcript" --session-id "$session" 2>/dev/null || true)
+# UserPromptSubmit fires before the prompt is written to the transcript, so
+# pass it through with --prompt: recall then reflects the current turn (and
+# works on the very first turn) instead of lagging one behind.
+args=(recall "$transcript" --session-id "$session")
+[[ -n "$prompt" ]] && args+=(--prompt "$prompt")
+
+context=$("$hayes_bin" "${args[@]}" 2>/dev/null || true)
 
 if [[ -z "$context" ]]; then
     exit 0

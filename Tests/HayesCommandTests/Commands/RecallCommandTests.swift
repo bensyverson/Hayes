@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 @testable import HayesCommand
 import HayesCore
+import Operator
 import Testing
 
 @Suite("RecallCommand parsing")
@@ -29,12 +30,19 @@ struct RecallCommandParsingTests {
         #expect(cmd.contextExtractor == .afm)
         #expect(cmd.sessionID == nil)
         #expect(cmd.format == .auto)
+        #expect(cmd.prompt == nil)
     }
 
     @Test("--format opencode is captured")
     func formatOverride() throws {
         let cmd = try RecallCommand.parse(["/tmp/storage", "--format", "opencode"])
         #expect(cmd.format == .opencode)
+    }
+
+    @Test("--prompt is captured")
+    func promptOverride() throws {
+        let cmd = try RecallCommand.parse(["/tmp/t.jsonl", "--prompt", "what changed?"])
+        #expect(cmd.prompt == "what changed?")
     }
 
     @Test("--session-id is captured")
@@ -90,6 +98,40 @@ struct RecallCommandHelpersTests {
     func sessionIDNoExtension() {
         let url = URL(fileURLWithPath: "/some/dir/session")
         #expect(RecallCommand.defaultSessionID(for: url) == "session")
+    }
+
+    @Test("combinedMessages appends the prompt as the trailing user message")
+    func combinedAppendsPrompt() {
+        let loaded = [
+            Operator.Message(role: .user, content: "first"),
+            Operator.Message(role: .assistant, content: "reply"),
+        ]
+        let result = RecallCommand.combinedMessages(loaded: loaded, prompt: "current question")
+        #expect(result.count == 3)
+        #expect(result.last?.role == .user)
+        #expect(result.last?.textContent == "current question")
+    }
+
+    @Test("combinedMessages on an empty transcript yields just the prompt")
+    func combinedEmptyLoaded() {
+        let result = RecallCommand.combinedMessages(loaded: [], prompt: "hello")
+        #expect(result.count == 1)
+        #expect(result.first?.role == .user)
+        #expect(result.first?.textContent == "hello")
+    }
+
+    @Test("combinedMessages leaves the list unchanged for a nil or empty prompt")
+    func combinedNilOrEmptyPrompt() {
+        let loaded = [Operator.Message(role: .user, content: "a")]
+        #expect(RecallCommand.combinedMessages(loaded: loaded, prompt: nil).count == 1)
+        #expect(RecallCommand.combinedMessages(loaded: loaded, prompt: "").count == 1)
+    }
+
+    @Test("combinedMessages does not duplicate a prompt already last in the transcript")
+    func combinedDedupesTrailingPrompt() {
+        let loaded = [Operator.Message(role: .user, content: "same")]
+        let result = RecallCommand.combinedMessages(loaded: loaded, prompt: "same")
+        #expect(result.count == 1)
     }
 
     @Test("resolvedOptions reflects flag values")
