@@ -69,6 +69,17 @@ extension GraphStore {
             );
             """)
         }
+        migrator.registerMigration("v4_pending_batches") { db in
+            try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS pending_batches (
+                batch_id TEXT PRIMARY KEY NOT NULL,
+                transcript TEXT NOT NULL UNIQUE,
+                min_turn INTEGER NOT NULL,
+                max_turn INTEGER NOT NULL,
+                submitted_at REAL NOT NULL
+            );
+            """)
+        }
         try migrator.migrate(queue)
     }
 }
