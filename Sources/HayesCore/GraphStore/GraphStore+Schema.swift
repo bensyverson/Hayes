@@ -60,6 +60,26 @@ extension GraphStore {
                 ON session_injections(session_id);
             """)
         }
+        migrator.registerMigration("v3_assess_progress") { db in
+            try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS assess_progress (
+                identity TEXT PRIMARY KEY NOT NULL,
+                max_turn_index INTEGER NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            """)
+        }
+        migrator.registerMigration("v4_pending_batches") { db in
+            try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS pending_batches (
+                batch_id TEXT PRIMARY KEY NOT NULL,
+                transcript TEXT NOT NULL UNIQUE,
+                min_turn INTEGER NOT NULL,
+                max_turn INTEGER NOT NULL,
+                submitted_at REAL NOT NULL
+            );
+            """)
+        }
         try migrator.migrate(queue)
     }
 }

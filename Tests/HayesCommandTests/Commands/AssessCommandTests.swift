@@ -36,6 +36,13 @@ struct AssessCommandParsingTests {
         #expect(cmd.storeSource == true)
         #expect(cmd.model == nil)
         #expect(cmd.sessionID == nil)
+        #expect(cmd.format == .auto)
+    }
+
+    @Test("--format opencode is captured")
+    func formatOverride() throws {
+        let cmd = try AssessCommand.parse(["/tmp/storage", "--format", "opencode"])
+        #expect(cmd.format == .opencode)
     }
 
     @Test("--strategy one-shot parses")
@@ -81,6 +88,19 @@ struct AssessCommandParsingTests {
         }
     }
 
+    @Test("--batch defaults to false and parses to true")
+    func batchFlag() throws {
+        #expect(try AssessCommand.parse(["/tmp/t.jsonl"]).batch == false)
+        #expect(try AssessCommand.parse(["/tmp/t.jsonl", "--batch"]).batch == true)
+    }
+
+    @Test("--batch with --analyzer afm is rejected — batch is anthropic-only")
+    func batchRequiresAnthropic() {
+        #expect(throws: (any Error).self) {
+            _ = try AssessCommand.parse(["/tmp/t.jsonl", "--batch", "--analyzer", "afm"])
+        }
+    }
+
     @Test("--session-id with multiple transcripts is rejected")
     func sessionIDWithMultipleRejected() {
         #expect(throws: (any Error).self) {
@@ -109,5 +129,16 @@ struct AssessCommandHelpersTests {
     func defaultIdentity() {
         let url = URL(fileURLWithPath: "/some/path/abc-uuid.jsonl")
         #expect(AssessCommand.defaultTranscriptIdentity(for: url) == "abc-uuid")
+    }
+
+    @Test("--reassess defaults to false and threads into resolvedOptions")
+    func reassessThreadsThrough() throws {
+        let off = try AssessCommand.parse(["/tmp/t.jsonl"])
+        #expect(off.reassess == false)
+        #expect(off.resolvedOptions().reassess == false)
+
+        let on = try AssessCommand.parse(["/tmp/t.jsonl", "--reassess"])
+        #expect(on.reassess == true)
+        #expect(on.resolvedOptions().reassess == true)
     }
 }

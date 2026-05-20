@@ -10,6 +10,13 @@ import Operator
 /// reinforces graph edges for each distilled ``Lesson``, threading
 /// provenance fields (`source_transcript`, `turn_index`,
 /// `source_excerpt`) into the writes.
+///
+/// Assessment is idempotent per transcript: the service records the
+/// highest turn index it has processed (see
+/// ``GraphStore/advanceAssessProgress(identity:to:)``) and on later runs
+/// analyzes only newer turns, so each turn reinforces its edges exactly
+/// once even though hooks pass the full transcript every time. Pass
+/// ``AssessOptions/reassess`` to force a full reprocess.
 public struct AssessService: Sendable {
     private let store: GraphStore
     private let embeddings: any EmbeddingProvider
@@ -76,13 +83,47 @@ public struct AssessService: Sendable {
         guard !messages.isEmpty else { return .empty }
         try validate(options.strategy)
 
-        let chunks = try await produceChunks(messages: messages, strategy: options.strategy)
-        guard chunks.contains(where: { !$0.lessons.isEmpty }) else { return .empty }
+        // The highest turn already assessed for this transcript, used to
+        // skip turns we've processed before. Tracked regardless of
+        // `storeSource` — progress is internal bookkeeping, not
+        // provenance — and ignored entirely under `--reassess`.
+        let priorMax: Int? = if let transcriptIdentity, !options.reassess {
+            try await store.assessProgress(for: transcriptIdentity)
+        } else {
+            nil
+        }
 
-        let persisted = try await persist(
-            chunks: chunks,
-            transcriptIdentity: transcriptIdentity,
-            options: options
+        let turns = Self.splitByTurn(messages)
+        let transcriptMaxTurn = turns.last?.turnIndex
+
+        let chunks = try await produceChunks(
+            messages: messages,
+            turns: turns,
+            strategy: options.strategy,
+            priorMax: priorMax
+        )
+        guard !chunks.isEmpty else { return .empty }
+
+        // Funnel through the shared ingest seam. `ingest` advances progress
+        // after a successful persist (even for lesson-less turns, so they
+        // aren't re-analyzed); on a failed write nothing advances and the
+        // turns retry next run. Progress is keyed on the real identity
+        // regardless of `storeSource` since it's bookkeeping, not provenance.
+        let storeIdentity = options.storeSource ? transcriptIdentity : nil
+        let analyzedTurns = chunks.map { chunk in
+            AnalyzedTurn(
+                turnIndex: chunk.turnIndex,
+                lessons: chunk.lessons,
+                excerpt: options.storeSource
+                    ? Self.excerpt(for: chunk.messages, limit: options.sourceExcerptLimit)
+                    : nil
+            )
+        }
+        let persisted = try await ingest(
+            turns: analyzedTurns,
+            provenanceIdentity: storeIdentity,
+            progressIdentity: transcriptIdentity,
+            advanceProgressTo: transcriptMaxTurn
         )
         return AssessResult(lessons: persisted)
     }
@@ -108,18 +149,24 @@ public struct AssessService: Sendable {
         let lessons: [Lesson]
     }
 
-    /// Splits `messages` into chunks per the requested strategy and
-    /// runs the analyzer for each chunk. Parallel mode bounds the
-    /// number of in-flight calls.
+    /// Runs the analyzer over the turns not yet assessed per the
+    /// requested strategy. Parallel mode analyzes each turn whose index
+    /// exceeds `priorMax`; one-shot tracks at transcript granularity, so
+    /// a non-nil `priorMax` means "already assessed" and yields no
+    /// chunks. Parallel mode bounds the number of in-flight calls.
     private func produceChunks(
         messages: [Operator.Message],
-        strategy: AssessOptions.Strategy
+        turns: [(turnIndex: Int, messages: [Operator.Message])],
+        strategy: AssessOptions.Strategy,
+        priorMax: Int?
     ) async throws -> [Chunk] {
         switch strategy {
         case let .parallel(concurrency):
-            let turns = Self.splitByTurn(messages)
-            return try await runParallel(turns: turns, concurrency: max(1, concurrency))
+            let floor = priorMax ?? -1
+            let newTurns = turns.filter { $0.turnIndex > floor }
+            return try await runParallel(turns: newTurns, concurrency: max(1, concurrency))
         case .oneShot:
+            guard priorMax == nil else { return [] }
             let result = try await analyzer.analyze(messages: messages, thinking: "")
             return [Chunk(turnIndex: nil, messages: messages, lessons: result.lessons)]
         }
@@ -171,26 +218,49 @@ public struct AssessService: Sendable {
 
     // MARK: - Persistence
 
-    /// For each lesson across all chunks, finds-or-creates the seed
-    /// and behavior nodes, reinforces the edge between them with the
-    /// chunk's provenance, and returns a flat list of persisted
-    /// lessons.
-    private func persist(
-        chunks: [Chunk],
-        transcriptIdentity: String?,
-        options: AssessOptions
+    /// A turn's analyzer output ready to reinforce: its index, the
+    /// distilled lessons, and the optional source excerpt. The live assess
+    /// path and the batch collector both funnel through ``ingest(turns:provenanceIdentity:progressIdentity:advanceProgressTo:)``
+    /// so reinforcement is identical across them.
+    struct AnalyzedTurn {
+        /// The zero-based turn index, or `nil` for a one-shot whole-transcript pass.
+        let turnIndex: Int?
+        /// The lessons distilled from the turn.
+        let lessons: [Lesson]
+        /// The source excerpt to stamp on each edge, or `nil`.
+        let excerpt: String?
+    }
+
+    /// Reinforces every lesson across `turns` and advances the stored
+    /// assess progress.
+    ///
+    /// For each lesson it finds-or-creates the seed and behavior nodes and
+    /// reinforces the edge between them with the turn's provenance. When
+    /// both `progressIdentity` and `advanceProgressTo` are supplied it
+    /// advances the progress mark — even if `turns` produced no lessons, so
+    /// processed turns aren't re-analyzed.
+    /// - Parameters:
+    ///   - turns: The analyzed turns to reinforce.
+    ///   - provenanceIdentity: The identity stamped on each edge's
+    ///     `source_transcript`, or `nil` to omit it (the
+    ///     `--no-store-source` shape).
+    ///   - progressIdentity: The transcript identity whose progress mark to
+    ///     advance, or `nil` to skip progress tracking. Independent of
+    ///     `provenanceIdentity` because progress is bookkeeping, not
+    ///     provenance.
+    ///   - advanceProgressTo: The turn index to advance the mark to.
+    /// - Returns: The persisted lessons, in turn order.
+    func ingest(
+        turns: [AnalyzedTurn],
+        provenanceIdentity: String?,
+        progressIdentity: String?,
+        advanceProgressTo: Int?
     ) async throws -> [AssessResult.PersistedLesson] {
         var output: [AssessResult.PersistedLesson] = []
         var snapshot = await store.embeddingSnapshot()
 
-        for chunk in chunks {
-            guard !chunk.lessons.isEmpty else { continue }
-            let excerpt = options.storeSource
-                ? Self.excerpt(for: chunk.messages, limit: options.sourceExcerptLimit)
-                : nil
-            let identity = options.storeSource ? transcriptIdentity : nil
-
-            for lesson in chunk.lessons {
+        for turn in turns where !turn.lessons.isEmpty {
+            for lesson in turn.lessons {
                 let seedEmbedding = try embeddings.embed(lesson.seed)
                 let seedNode = try await ensureNode(
                     text: lesson.seed,
@@ -209,9 +279,9 @@ public struct AssessService: Sendable {
                 case .selfAssessment: config.selfAssessmentScale
                 }
                 let provenance = EdgeProvenance(
-                    sourceTranscript: identity,
-                    turnIndex: chunk.turnIndex,
-                    sourceExcerpt: excerpt
+                    sourceTranscript: provenanceIdentity,
+                    turnIndex: turn.turnIndex,
+                    sourceExcerpt: turn.excerpt
                 )
                 try await store.reinforceEdge(
                     seedID: seedNode.id,
@@ -233,10 +303,14 @@ public struct AssessService: Sendable {
                     behaviorText: lesson.behavior,
                     sentiment: lesson.sentiment,
                     source: lesson.source,
-                    turnIndex: chunk.turnIndex,
+                    turnIndex: turn.turnIndex,
                     edgeWeight: edge?.weight ?? 0
                 ))
             }
+        }
+
+        if let progressIdentity, let advanceProgressTo {
+            try await store.advanceAssessProgress(identity: progressIdentity, to: advanceProgressTo)
         }
         return output
     }

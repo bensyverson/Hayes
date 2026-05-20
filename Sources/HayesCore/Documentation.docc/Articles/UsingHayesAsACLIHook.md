@@ -1,7 +1,9 @@
 # Using Hayes as a CLI hook
 
 Wire `hayes recall` into Claude Code's `UserPromptSubmit` hook and
-`hayes assess` into a `Stop`-hook or nightly cron.
+`hayes assess` into a `Stop`-hook or nightly cron. The same two commands
+back the OpenCode plugin, which reads OpenCode's session database instead
+of a JSONL transcript.
 
 ## Overview
 
@@ -19,7 +21,10 @@ The split is:
 - **`hayes assess`** is the offline command. It reads a completed
   transcript, distils ``Lesson``s, and reinforces edges in the graph. It
   can run on a `Stop` hook so the session's signal lands immediately, or
-  in a nightly cron over an archive of past transcripts.
+  in a nightly cron over an archive of past transcripts. Assessment is
+  idempotent per transcript — it only processes turns it hasn't seen
+  before — so the hook and the cron compose without double-counting (see
+  [Incremental assessment and backfill](#Incremental-assessment-and-backfill)).
 
 Both commands default their `--session-id` / transcript identity to the
 transcript filename stem. For a Claude Code JSONL transcript that stem
@@ -27,6 +32,12 @@ is the harness-native session UUID, so the live recall path and the
 offline assess path agree on identity without any extra flag plumbing.
 That's what makes [`hayes session show`](#Inspecting-a-session) work
 the way users expect.
+
+The transcript *source* depends on the harness. Claude Code writes one
+JSONL file per session, which the loader auto-detects. OpenCode instead
+stores every session in a single SQLite database (`opencode.db`); pass
+`--format opencode` and an explicit `--session-id` to read it (see
+[Wiring into OpenCode](#Wiring-into-OpenCode)).
 
 ## Wiring `hayes recall` into `UserPromptSubmit`
 
@@ -61,8 +72,11 @@ set -euo pipefail
 payload=$(cat)
 transcript=$(jq -r '.transcript_path' <<<"$payload")
 session=$(jq -r '.session_id'      <<<"$payload")
+prompt=$(jq -r '.prompt // empty'  <<<"$payload")
 
-context=$(hayes recall "$transcript" --session-id "$session")
+args=(recall "$transcript" --session-id "$session")
+[[ -n "$prompt" ]] && args+=(--prompt "$prompt")
+context=$(hayes "${args[@]}")
 
 jq -n --arg ctx "$context" '{
   hookSpecificOutput: {
@@ -75,6 +89,13 @@ jq -n --arg ctx "$context" '{
 `--session-id` is redundant for Claude Code (the transcript filename
 stem already *is* the session UUID) but passing it makes the contract
 explicit and survives a harness that names its transcripts differently.
+
+`--prompt` matters more than it looks: `UserPromptSubmit` fires *before*
+Claude Code writes the new prompt to the transcript, so without it recall
+is grounded in history through the previous turn (and the very first turn
+sees nothing). Passing the payload's `prompt` makes recall reflect the
+current turn. OpenCode persists the message before its hook fires, so it
+is already current-turn and does not need this.
 
 Register the script under the `UserPromptSubmit` event in your
 `settings.json` (or a plugin's `hooks/hooks.json`):
@@ -107,6 +128,10 @@ Register the script under the `UserPromptSubmit` event in your
   `--context-extractor none` to skip the LLM entirely and fall back to
   the last user message verbatim — the right choice for CI or batch
   imports where you don't want to spend tokens on inference.
+- `--prompt` supplies the in-flight user message out-of-band, appended as
+  the trailing user turn. Use it when the harness has the prompt before it
+  reaches the transcript (Claude Code's `UserPromptSubmit`) so recall is
+  anchored on the current turn rather than the previous one.
 - `--window` controls how many trailing transcript messages the
   extractor sees (default 5).
 - `--dry-run` runs retrieval without persisting to `session_injections`
@@ -178,6 +203,77 @@ turn and prints a per-file lesson count followed by a total. The cron
 path is the more reliable of the two — use it if you can't tolerate
 occasional missed sessions.
 
+### Incremental assessment and backfill
+
+`hayes assess` is idempotent at turn granularity. It records the highest
+turn index it has assessed for each transcript identity and, on every
+later run, analyzes only the turns past that mark. So firing the `Stop`
+hook on each turn reinforces that turn's edges exactly once — not the
+whole conversation over again — which keeps cost roughly linear in the
+session length and stops early turns from being over-weighted by repeated
+reinforcement. (One-shot `--strategy` is the exception: it can only track
+whether a transcript has been assessed at all, since it analyzes the
+whole conversation in a single call.)
+
+That idempotency is what makes a periodic cron a safe *backfill* rather
+than a competing writer. The live `Stop` hook keeps the graph current
+turn-by-turn, but it can't catch every turn: a session that crashes
+before the agent finishes never fires `Stop`, and a non-interactive run
+that bypasses hooks entirely leaves no live signal at all. A nightly
+cron over the whole archive sweeps those up — and because assess skips
+turns it has already processed, pointing it at transcripts the live hook
+already handled costs almost nothing and never double-reinforces:
+
+```bash
+# nightly: backfill anything the live Stop hook missed
+hayes assess ~/.claude/projects/*/conversation-*.jsonl
+```
+
+To force a full re-distillation of a transcript — for instance after
+changing the analyzer model or prompt, so you want every turn re-judged
+— pass `--reassess`, which ignores the stored progress mark and
+reprocesses from the first turn.
+
+### Batch assess for lower cost
+
+`hayes assess --batch` distils through Anthropic's **Message Batches API**
+instead of live calls. The batch API is a flat ~50% cheaper, which for
+heavy Claude-Code-style turns dwarfs what prompt caching can save. The
+trade-off is latency: a lesson lands once its batch completes — usually
+minutes, 24h SLA worst case — rather than the instant the turn ends.
+**Recall is unaffected**: injected memory is always immediate, because only
+distillation (assess) is deferred, never retrieval. Anthropic-only —
+`--batch` requires `--analyzer anthropic` and an `ANTHROPIC_API_KEY`; AFM
+stays on the live synchronous path.
+
+There's no daemon and no queue. Each `hayes assess --batch <transcript>` is
+one idempotent *reconcile* pass driven entirely off durable state:
+
+1. **Collect** any ready batches — reinforce their completed turns, advance
+   the progress mark, and drop them. A batch that came back with a failed
+   request anywhere in its range is reinforced up to the gap; the tail
+   re-enters the backlog.
+2. **Submit** the transcript's backlog (turns past the progress mark) as a
+   single new batch, unless one is already in flight for it (at most one
+   batch per transcript keeps the progress mark hole-free).
+
+Because it's idempotent and silently degrades, you call it at every
+opportunity and it converges. The shipped plugin wires it on **`SessionStart`**
+(collect batches from earlier sessions, catch this one up) and **`Stop`**
+(submit the finished turn, collect ready ones); the OpenCode plugin uses
+**`session.created`** and **`session.idle`** the same way. A cron backstop
+sweeps the 24h tail and anything the live events missed:
+
+```bash
+# nightly backstop for the batch path
+hayes assess --batch ~/.claude/projects/*/conversation-*.jsonl
+```
+
+One provenance caveat: batch-distilled edges record `source_transcript` and
+`turn_index` but leave `source_excerpt` NULL — the turn's text isn't on hand
+at collection time. `hayes session show` still attributes the edge to its
+transcript and turn; only the inline excerpt is absent.
+
 ### AFM vs Anthropic for the analyzer
 
 `hayes recall`'s extractor is happy on AFM — it's producing short
@@ -204,6 +300,51 @@ example `claude-haiku-4-5`) and is ignored under AFM.
   `edges.source_excerpt` NULL. `turn_index` is still recorded, so
   ``Edge/provenance`` remains non-nil with most of its fields null —
   the renderers handle that shape, and downstream code should too.
+  Progress tracking is unaffected: assess still records how far it got,
+  since that's internal bookkeeping rather than edge provenance.
+- `--reassess` ignores the stored per-transcript progress mark and
+  reprocesses every turn (see
+  [Incremental assessment and backfill](#Incremental-assessment-and-backfill)).
+
+## Wiring into OpenCode
+
+OpenCode plugins are JavaScript/TypeScript modules, not shell hooks, so
+the integration is a small `.ts` file (`opencode-plugin/hayes.ts`) rather
+than the bash scripts above. It maps OpenCode's plugin surface onto the
+same two commands:
+
+- The **`experimental.chat.system.transform`** hook runs `hayes recall`
+  before each reply and pushes the framed memories block onto the system
+  prompt (`output.system`). This hook receives only `{ sessionID, model }`,
+  so the plugin reads the latest user message from `opencode.db` itself.
+  Verified against OpenCode 1.15.5: the message is persisted before the hook
+  fires, so recall reflects the current turn. The `chat.message` hook (which
+  carries the message directly) is the fallback should a future version
+  change that ordering.
+- The **`session.idle`** event runs `hayes assess --batch` once the agent
+  finishes (the analogue of Claude Code's `Stop`), and **`session.created`**
+  runs it at session start to collect ready batches — mirroring the Claude
+  Code plugin's `Stop` + `SessionStart` wiring (see
+  [Batch assess](#Batch-assess-for-lower-cost)).
+
+Both shell out to:
+
+```bash
+hayes recall "$OPENCODE_DATA_DIR/opencode.db" --format opencode --session-id "$id"
+hayes assess "$OPENCODE_DATA_DIR/opencode.db" --format opencode --session-id "$id" --batch
+```
+
+`--session-id` is **required** here: unlike a JSONL transcript, OpenCode's
+database holds every session, so there is no filename stem to fall back on.
+The parser opens the database read-only where possible (falling back to a
+normal connection for WAL-mode databases, which SQLite cannot open
+read-only) and only ever issues `SELECT`s, so OpenCode's data is never
+modified. It reads the `message` and `part` tables, decoding each row's JSON
+`data` column — `text` parts become message text, `tool` parts become tool
+calls plus their results, and `reasoning`/`file`/`step-*` parts are dropped.
+
+The plugin downloads and caches the `hayes` binary on first use, exactly
+like the Claude Code plugin; see the project README for install steps.
 
 ## Inspecting a session
 

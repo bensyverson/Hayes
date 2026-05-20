@@ -11,6 +11,18 @@
         ]
       }
     ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/assess.sh",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "*",

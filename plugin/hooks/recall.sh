@@ -12,20 +12,32 @@ if ! command -v jq >/dev/null 2>&1; then
     exit 0
 fi
 
-hayes_bin="${CLAUDE_PLUGIN_ROOT:-}/bin/hayes"
-if [[ ! -x "$hayes_bin" ]]; then
+# Resolve the hayes binary via the bootstrap, which downloads + caches the
+# release binary on first run. Any failure degrades to "no recalled context."
+plugin_root="${CLAUDE_PLUGIN_ROOT:-}"
+version=$(jq -r '.version // empty' "${plugin_root}/.claude-plugin/plugin.json" 2>/dev/null || true)
+[[ -n "$version" ]] || exit 0
+hayes_bin=$("${plugin_root}/hooks/lib/ensure-hayes.sh" "$version" 2>/dev/null || true)
+if [[ -z "$hayes_bin" || ! -x "$hayes_bin" ]]; then
     exit 0
 fi
 
 payload=$(cat)
 transcript=$(jq -r '.transcript_path // empty' <<<"$payload")
 session=$(jq -r '.session_id // empty' <<<"$payload")
+prompt=$(jq -r '.prompt // empty' <<<"$payload")
 
 if [[ -z "$transcript" || -z "$session" ]]; then
     exit 0
 fi
 
-context=$("$hayes_bin" recall "$transcript" --session-id "$session" 2>/dev/null || true)
+# UserPromptSubmit fires before the prompt is written to the transcript, so
+# pass it through with --prompt: recall then reflects the current turn (and
+# works on the very first turn) instead of lagging one behind.
+args=(recall "$transcript" --session-id "$session")
+[[ -n "$prompt" ]] && args+=(--prompt "$prompt")
+
+context=$("$hayes_bin" "${args[@]}" 2>/dev/null || true)
 
 if [[ -z "$context" ]]; then
     exit 0

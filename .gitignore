@@ -12,3 +12,6 @@ DerivedData/
 .jobs.db-shm
 .jobs.db-wal
 scripts/cache-trace-proxy/captures/
+# The plugin binary is fetched from the GitHub release by the bootstrap
+# (plugin/hooks/lib/ensure-hayes.sh); it is never committed.
+plugin/bin/

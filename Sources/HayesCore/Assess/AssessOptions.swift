@@ -30,15 +30,22 @@ public struct AssessOptions: Sendable {
     /// from a turn. Defaults to 500.
     public var sourceExcerptLimit: Int
 
+    /// When `true`, ignore stored assess progress and reprocess every
+    /// turn — the `--reassess` switch. Defaults to `false`, so a normal
+    /// run only assesses turns newer than the last recorded progress.
+    public var reassess: Bool
+
     /// Creates a new options value. All parameters are defaulted.
     public init(
         strategy: Strategy = .parallel,
         storeSource: Bool = true,
-        sourceExcerptLimit: Int = 500
+        sourceExcerptLimit: Int = 500,
+        reassess: Bool = false
     ) {
         self.strategy = strategy
         self.storeSource = storeSource
         self.sourceExcerptLimit = sourceExcerptLimit
+        self.reassess = reassess
     }
 
     /// Default options: parallel(concurrency: 4), provenance on, 500-char excerpts.

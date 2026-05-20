@@ -20,12 +20,15 @@ public struct TranscriptLoader: Sendable {
         case auto
         /// Claude Code's JSONL transcript format.
         case claudeCode
+        /// OpenCode's SQLite session database (`opencode.db`). Requires a
+        /// session identifier.
+        case opencode
         /// OpenAI Responses API transcripts. Recognized but not yet
         /// implemented.
         case openaiResponses
     }
 
-    /// Errors thrown by ``load(path:format:)``.
+    /// Errors thrown by ``load(path:format:sessionID:)``.
     public enum LoadError: Swift.Error, Sendable {
         /// The transcript file could not be read from disk.
         case fileNotFound(URL)
@@ -33,6 +36,10 @@ public struct TranscriptLoader: Sendable {
         case formatNotDetected(URL)
         /// The requested format is reserved but not yet implemented.
         case formatNotImplemented(Format)
+        /// The format requires a session identifier that was not supplied.
+        /// OpenCode stores every session in one shared database, so there is
+        /// no filename stem to fall back on.
+        case sessionIDRequired(Format)
     }
 
     /// Creates a loader. No configuration is required.
@@ -40,10 +47,17 @@ public struct TranscriptLoader: Sendable {
 
     /// Loads `path` and returns its messages in conversation order.
     /// - Parameters:
-    ///   - path: The transcript file URL.
+    ///   - path: The transcript file URL, or — for ``Format/opencode`` — the
+    ///     path to OpenCode's `opencode.db`.
     ///   - format: The format to use. Defaults to ``Format/auto``.
+    ///   - sessionID: The session identifier. Required for
+    ///     ``Format/opencode``; ignored by the file-based formats.
     /// - Returns: The decoded messages.
-    public func load(path: URL, format: Format = .auto) async throws -> [Operator.Message] {
+    public func load(
+        path: URL,
+        format: Format = .auto,
+        sessionID: String? = nil
+    ) async throws -> [Operator.Message] {
         guard FileManager.default.fileExists(atPath: path.path) else {
             throw LoadError.fileNotFound(path)
         }
@@ -52,6 +66,11 @@ public struct TranscriptLoader: Sendable {
         switch resolved {
         case .claudeCode:
             return try ClaudeCodeTranscriptParser().parse(path)
+        case .opencode:
+            guard let sessionID else {
+                throw LoadError.sessionIDRequired(.opencode)
+            }
+            return try OpenCodeTranscriptParser().parse(databasePath: path, sessionID: sessionID)
         case .openaiResponses:
             throw LoadError.formatNotImplemented(.openaiResponses)
         case .auto:
@@ -63,6 +82,7 @@ public struct TranscriptLoader: Sendable {
     /// requested format unchanged.
     private func resolveFormat(_ format: Format, for url: URL) throws -> Format {
         guard format == .auto else { return format }
+        if url.lastPathComponent == "opencode.db" { return .opencode }
         if url.pathExtension.lowercased() == "jsonl" { return .claudeCode }
         if probeIsClaudeCode(url: url) { return .claudeCode }
         throw LoadError.formatNotDetected(url)

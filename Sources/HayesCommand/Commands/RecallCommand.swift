@@ -32,6 +32,21 @@ struct RecallCommand: AsyncParsableCommand {
     @Option(name: .customLong("session-id"), help: "Session identifier. Defaults to the transcript filename stem.")
     var sessionID: String?
 
+    /// Transcript format. ``TranscriptLoader/Format/auto`` (the default)
+    /// infers the format from a Claude Code JSONL file; pass
+    /// ``TranscriptLoader/Format/opencode`` with `--session-id` to read an
+    /// OpenCode storage directory instead.
+    @Option(name: .long, help: "Transcript format: auto (default), claudeCode, or opencode.")
+    var format: TranscriptLoader.Format = .auto
+
+    /// The in-flight user prompt, when the harness can supply it before it
+    /// lands in the transcript. Claude Code's `UserPromptSubmit` hook fires
+    /// before the new prompt is written to the transcript, so passing it
+    /// here lets recall reflect the current turn instead of lagging by one
+    /// (and surfaces memories on the very first turn). Ignored when empty.
+    @Option(name: .long, help: "Current user prompt to treat as the latest message (e.g. from a UserPromptSubmit hook).")
+    var prompt: String?
+
     /// Backend to use for the optional ``HayesCore/ContextExtractor``
     /// pre-stage. ``MemoryBackendName/none`` disables the extractor
     /// entirely; recall then uses the last user message verbatim as the
@@ -78,16 +93,22 @@ struct RecallCommand: AsyncParsableCommand {
 
         // UserPromptSubmit fires before Claude Code writes the new prompt to
         // the transcript, so on the first turn of a fresh session the file
-        // doesn't exist yet. That's "no history," not an error — bail
-        // quietly so the hook produces empty output rather than a failure.
-        guard FileManager.default.fileExists(atPath: transcriptURL.path) else {
+        // doesn't exist yet. When the harness passes the prompt via --prompt
+        // we can still recall from it; otherwise that's "no history," not an
+        // error — bail quietly so the hook produces empty output.
+        let transcriptExists = FileManager.default.fileExists(atPath: transcriptURL.path)
+        guard transcriptExists || prompt?.isEmpty == false else {
             return
         }
 
         let session = sessionID ?? RecallCommand.defaultSessionID(for: transcriptURL)
 
         let loader = TranscriptLoader()
-        let messages = try await loader.load(path: transcriptURL)
+        let loaded = transcriptExists
+            ? try await loader.load(path: transcriptURL, format: format, sessionID: sessionID)
+            : []
+        let messages = RecallCommand.combinedMessages(loaded: loaded, prompt: prompt)
+        guard !messages.isEmpty else { return }
 
         let dbURL = HayesPaths.resolve(dbArgument: common.db)
         let store = try GraphStore(path: dbURL)
@@ -123,6 +144,18 @@ struct RecallCommand: AsyncParsableCommand {
     /// formats it's a stable, conversation-scoped string.
     static func defaultSessionID(for url: URL) -> String {
         url.deletingPathExtension().lastPathComponent
+    }
+
+    /// Returns `loaded` with `prompt` appended as a trailing `.user`
+    /// message, so an in-flight prompt the harness supplied out-of-band
+    /// becomes the retrieval anchor. A `nil`/empty prompt — or one already
+    /// equal to the last user message (a harness that persists first) —
+    /// leaves the list unchanged.
+    static func combinedMessages(loaded: [Operator.Message], prompt: String?) -> [Operator.Message] {
+        guard let prompt, !prompt.isEmpty else { return loaded }
+        let lastUserText = loaded.last(where: { $0.role == .user && $0.toolCallId == nil })?.textContent
+        guard lastUserText != prompt else { return loaded }
+        return loaded + [Operator.Message(role: .user, content: prompt)]
     }
 
     /// Maps the parsed flag surface to the ``HayesCore/RecallOptions``
