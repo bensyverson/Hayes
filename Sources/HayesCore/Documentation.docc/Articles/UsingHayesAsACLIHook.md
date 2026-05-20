@@ -21,7 +21,10 @@ The split is:
 - **`hayes assess`** is the offline command. It reads a completed
   transcript, distils ``Lesson``s, and reinforces edges in the graph. It
   can run on a `Stop` hook so the session's signal lands immediately, or
-  in a nightly cron over an archive of past transcripts.
+  in a nightly cron over an archive of past transcripts. Assessment is
+  idempotent per transcript — it only processes turns it hasn't seen
+  before — so the hook and the cron compose without double-counting (see
+  [Incremental assessment and backfill](#Incremental-assessment-and-backfill)).
 
 Both commands default their `--session-id` / transcript identity to the
 transcript filename stem. For a Claude Code JSONL transcript that stem
@@ -200,6 +203,37 @@ turn and prints a per-file lesson count followed by a total. The cron
 path is the more reliable of the two — use it if you can't tolerate
 occasional missed sessions.
 
+### Incremental assessment and backfill
+
+`hayes assess` is idempotent at turn granularity. It records the highest
+turn index it has assessed for each transcript identity and, on every
+later run, analyzes only the turns past that mark. So firing the `Stop`
+hook on each turn reinforces that turn's edges exactly once — not the
+whole conversation over again — which keeps cost roughly linear in the
+session length and stops early turns from being over-weighted by repeated
+reinforcement. (One-shot `--strategy` is the exception: it can only track
+whether a transcript has been assessed at all, since it analyzes the
+whole conversation in a single call.)
+
+That idempotency is what makes a periodic cron a safe *backfill* rather
+than a competing writer. The live `Stop` hook keeps the graph current
+turn-by-turn, but it can't catch every turn: a session that crashes
+before the agent finishes never fires `Stop`, and a non-interactive run
+that bypasses hooks entirely leaves no live signal at all. A nightly
+cron over the whole archive sweeps those up — and because assess skips
+turns it has already processed, pointing it at transcripts the live hook
+already handled costs almost nothing and never double-reinforces:
+
+```bash
+# nightly: backfill anything the live Stop hook missed
+hayes assess ~/.claude/projects/*/conversation-*.jsonl
+```
+
+To force a full re-distillation of a transcript — for instance after
+changing the analyzer model or prompt, so you want every turn re-judged
+— pass `--reassess`, which ignores the stored progress mark and
+reprocesses from the first turn.
+
 ### AFM vs Anthropic for the analyzer
 
 `hayes recall`'s extractor is happy on AFM — it's producing short
@@ -226,6 +260,11 @@ example `claude-haiku-4-5`) and is ignored under AFM.
   `edges.source_excerpt` NULL. `turn_index` is still recorded, so
   ``Edge/provenance`` remains non-nil with most of its fields null —
   the renderers handle that shape, and downstream code should too.
+  Progress tracking is unaffected: assess still records how far it got,
+  since that's internal bookkeeping rather than edge provenance.
+- `--reassess` ignores the stored per-transcript progress mark and
+  reprocesses every turn (see
+  [Incremental assessment and backfill](#Incremental-assessment-and-backfill)).
 
 ## Wiring into OpenCode
 

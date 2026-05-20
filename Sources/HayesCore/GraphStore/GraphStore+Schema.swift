@@ -60,6 +60,15 @@ extension GraphStore {
                 ON session_injections(session_id);
             """)
         }
+        migrator.registerMigration("v3_assess_progress") { db in
+            try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS assess_progress (
+                identity TEXT PRIMARY KEY NOT NULL,
+                max_turn_index INTEGER NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            """)
+        }
         try migrator.migrate(queue)
     }
 }

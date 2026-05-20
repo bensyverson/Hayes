@@ -65,6 +65,12 @@ struct AssessCommand: AsyncParsableCommand {
     )
     var storeSource: Bool = true
 
+    /// Forces a full reprocess, ignoring stored assess progress. By
+    /// default `hayes assess` only analyzes turns newer than the last
+    /// recorded progress for the transcript identity.
+    @Flag(name: .customLong("reassess"), help: "Reprocess every turn, ignoring stored assess progress.")
+    var reassess: Bool = false
+
     /// Anthropic API key for the analyzer when ``analyzer`` is
     /// ``MemoryBackendName/anthropic``. Falls back to
     /// `ANTHROPIC_API_KEY`.
@@ -151,7 +157,8 @@ struct AssessCommand: AsyncParsableCommand {
     func resolvedOptions() -> AssessOptions {
         AssessOptions(
             strategy: AssessCommand.resolveStrategy(strategy, concurrency: concurrency),
-            storeSource: storeSource
+            storeSource: storeSource,
+            reassess: reassess
         )
     }
 }

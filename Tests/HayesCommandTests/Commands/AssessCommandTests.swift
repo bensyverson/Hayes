@@ -117,4 +117,15 @@ struct AssessCommandHelpersTests {
         let url = URL(fileURLWithPath: "/some/path/abc-uuid.jsonl")
         #expect(AssessCommand.defaultTranscriptIdentity(for: url) == "abc-uuid")
     }
+
+    @Test("--reassess defaults to false and threads into resolvedOptions")
+    func reassessThreadsThrough() throws {
+        let off = try AssessCommand.parse(["/tmp/t.jsonl"])
+        #expect(off.reassess == false)
+        #expect(off.resolvedOptions().reassess == false)
+
+        let on = try AssessCommand.parse(["/tmp/t.jsonl", "--reassess"])
+        #expect(on.reassess == true)
+        #expect(on.resolvedOptions().reassess == true)
+    }
 }

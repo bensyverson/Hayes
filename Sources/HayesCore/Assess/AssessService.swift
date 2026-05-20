@@ -10,6 +10,13 @@ import Operator
 /// reinforces graph edges for each distilled ``Lesson``, threading
 /// provenance fields (`source_transcript`, `turn_index`,
 /// `source_excerpt`) into the writes.
+///
+/// Assessment is idempotent per transcript: the service records the
+/// highest turn index it has processed (see
+/// ``GraphStore/advanceAssessProgress(identity:to:)``) and on later runs
+/// analyzes only newer turns, so each turn reinforces its edges exactly
+/// once even though hooks pass the full transcript every time. Pass
+/// ``AssessOptions/reassess`` to force a full reprocess.
 public struct AssessService: Sendable {
     private let store: GraphStore
     private let embeddings: any EmbeddingProvider
@@ -76,14 +83,41 @@ public struct AssessService: Sendable {
         guard !messages.isEmpty else { return .empty }
         try validate(options.strategy)
 
-        let chunks = try await produceChunks(messages: messages, strategy: options.strategy)
-        guard chunks.contains(where: { !$0.lessons.isEmpty }) else { return .empty }
+        // The highest turn already assessed for this transcript, used to
+        // skip turns we've processed before. Tracked regardless of
+        // `storeSource` — progress is internal bookkeeping, not
+        // provenance — and ignored entirely under `--reassess`.
+        let priorMax: Int? = if let transcriptIdentity, !options.reassess {
+            try await store.assessProgress(for: transcriptIdentity)
+        } else {
+            nil
+        }
+
+        let turns = Self.splitByTurn(messages)
+        let transcriptMaxTurn = turns.last?.turnIndex
+
+        let chunks = try await produceChunks(
+            messages: messages,
+            turns: turns,
+            strategy: options.strategy,
+            priorMax: priorMax
+        )
+        guard !chunks.isEmpty else { return .empty }
 
         let persisted = try await persist(
             chunks: chunks,
             transcriptIdentity: transcriptIdentity,
             options: options
         )
+
+        // Advance only after a successful persist, so a failed write
+        // retries the same turns on the next run. Records progress even
+        // when the processed turns produced no lessons, so they aren't
+        // re-analyzed.
+        if let transcriptIdentity, let transcriptMaxTurn {
+            try await store.advanceAssessProgress(identity: transcriptIdentity, to: transcriptMaxTurn)
+        }
+
         return AssessResult(lessons: persisted)
     }
 
@@ -108,18 +142,24 @@ public struct AssessService: Sendable {
         let lessons: [Lesson]
     }
 
-    /// Splits `messages` into chunks per the requested strategy and
-    /// runs the analyzer for each chunk. Parallel mode bounds the
-    /// number of in-flight calls.
+    /// Runs the analyzer over the turns not yet assessed per the
+    /// requested strategy. Parallel mode analyzes each turn whose index
+    /// exceeds `priorMax`; one-shot tracks at transcript granularity, so
+    /// a non-nil `priorMax` means "already assessed" and yields no
+    /// chunks. Parallel mode bounds the number of in-flight calls.
     private func produceChunks(
         messages: [Operator.Message],
-        strategy: AssessOptions.Strategy
+        turns: [(turnIndex: Int, messages: [Operator.Message])],
+        strategy: AssessOptions.Strategy,
+        priorMax: Int?
     ) async throws -> [Chunk] {
         switch strategy {
         case let .parallel(concurrency):
-            let turns = Self.splitByTurn(messages)
-            return try await runParallel(turns: turns, concurrency: max(1, concurrency))
+            let floor = priorMax ?? -1
+            let newTurns = turns.filter { $0.turnIndex > floor }
+            return try await runParallel(turns: newTurns, concurrency: max(1, concurrency))
         case .oneShot:
+            guard priorMax == nil else { return [] }
             let result = try await analyzer.analyze(messages: messages, thinking: "")
             return [Chunk(turnIndex: nil, messages: messages, lessons: result.lessons)]
         }
